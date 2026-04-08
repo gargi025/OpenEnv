@@ -1,24 +1,11 @@
 """
-models.py — Typed Pydantic models for the Customer Support Ticket Resolution environment.
-
-Observation  : what the agent sees each step
-Action       : what the agent can do
-StepResult   : returned by step()
-ResetResult  : returned by reset()
-StateResult  : returned by state()
+models.py — Typed Pydantic models for the Customer Support Ticket Resolution OpenEnv.
 """
-
 from __future__ import annotations
-
 from enum import Enum
 from typing import Any, Dict, List, Optional
-
 from pydantic import BaseModel, Field
 
-
-# ---------------------------------------------------------------------------
-# Enumerations
-# ---------------------------------------------------------------------------
 
 class TicketPriority(str, Enum):
     LOW = "low"
@@ -34,6 +21,7 @@ class TicketCategory(str, Enum):
     GENERAL = "general"
     REFUND = "refund"
     SHIPPING = "shipping"
+    SECURITY = "security"
 
 
 class TicketStatus(str, Enum):
@@ -44,24 +32,39 @@ class TicketStatus(str, Enum):
     ESCALATED = "escalated"
 
 
+class CustomerSentiment(str, Enum):
+    """Tracks how the customer feels. Shifts dynamically with agent behaviour."""
+    ANGRY = "angry"
+    FRUSTRATED = "frustrated"
+    NEUTRAL = "neutral"
+    SATISFIED = "satisfied"
+    DELIGHTED = "delighted"
+
+
 class ActionType(str, Enum):
-    REPLY = "reply"                    # Send a reply to the customer
-    CATEGORIZE = "categorize"          # Set ticket category
-    SET_PRIORITY = "set_priority"      # Set ticket priority
-    ESCALATE = "escalate"              # Escalate to a human agent
-    RESOLVE = "resolve"                # Mark ticket as resolved
-    REQUEST_INFO = "request_info"      # Ask customer for more info
-    APPLY_TEMPLATE = "apply_template"  # Use a canned response template
+    REPLY = "reply"
+    CATEGORIZE = "categorize"
+    SET_PRIORITY = "set_priority"
+    ESCALATE = "escalate"
+    RESOLVE = "resolve"
+    REQUEST_INFO = "request_info"
+    APPLY_TEMPLATE = "apply_template"
+    ADD_NOTE = "add_note"
+    OFFER_COMPENSATION = "offer_compensation"
 
 
-# ---------------------------------------------------------------------------
-# Ticket & Message models
-# ---------------------------------------------------------------------------
+class SLAConfig(BaseModel):
+    tier: str = "standard"
+    # Steps before warning / breach (not wall-clock time, since agents run at variable speed)
+    warn_step: int = 3
+    breach_step: int = 7
+    breach_penalty: float = 0.12
+
 
 class CustomerMessage(BaseModel):
-    sender: str = Field(..., description="'customer' or 'agent'")
-    content: str = Field(..., description="Message body text")
-    timestamp: str = Field(..., description="ISO-8601 timestamp string")
+    sender: str   # 'customer' | 'agent' | 'system'
+    content: str
+    timestamp: str
 
 
 class Ticket(BaseModel):
@@ -69,29 +72,21 @@ class Ticket(BaseModel):
     subject: str
     customer_name: str
     customer_email: str
+    # NOTE: priority and category here are the INITIAL values set by the system.
+    # Agents must observe them and decide whether to change them.
     priority: TicketPriority
     category: TicketCategory
     status: TicketStatus
+    sentiment: CustomerSentiment = CustomerSentiment.NEUTRAL
     conversation: List[CustomerMessage] = Field(default_factory=list)
+    internal_notes: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    sla: SLAConfig = Field(default_factory=SLAConfig)
+    tags: List[str] = Field(default_factory=list)
 
-
-# ---------------------------------------------------------------------------
-# Action model
-# ---------------------------------------------------------------------------
 
 class SupportAction(BaseModel):
-    """
-    The agent emits exactly one SupportAction per step.
-
-    action_type   : one of ActionType
-    reply_text    : required when action_type is REPLY or REQUEST_INFO
-    category      : required when action_type is CATEGORIZE
-    priority      : required when action_type is SET_PRIORITY
-    template_id   : required when action_type is APPLY_TEMPLATE
-    escalation_reason : optional note when action_type is ESCALATE
-    resolution_summary : optional summary when action_type is RESOLVE
-    """
+    """One action emitted by the agent per step."""
     action_type: ActionType
     reply_text: Optional[str] = None
     category: Optional[TicketCategory] = None
@@ -99,38 +94,28 @@ class SupportAction(BaseModel):
     template_id: Optional[str] = None
     escalation_reason: Optional[str] = None
     resolution_summary: Optional[str] = None
+    note_text: Optional[str] = None
+    compensation_amount: Optional[float] = None
+    tags: Optional[List[str]] = None
 
-
-# ---------------------------------------------------------------------------
-# Observation model
-# ---------------------------------------------------------------------------
 
 class SupportObservation(BaseModel):
-    """Everything the agent can observe at a given step."""
+    """Full observation returned to the agent each step."""
     ticket: Ticket
     step_number: int
     max_steps: int
-    available_templates: List[Dict[str, str]] = Field(
-        default_factory=list,
-        description="List of {id, name, preview} canned response templates"
-    )
-    kb_snippets: List[str] = Field(
-        default_factory=list,
-        description="Relevant knowledge-base snippets for this ticket"
-    )
-    last_action_feedback: Optional[str] = Field(
-        None,
-        description="Human-readable feedback on the previous action"
-    )
-    task_instructions: str = Field(
-        ...,
-        description="Natural-language description of what the agent must accomplish"
-    )
+    steps_remaining: int
+    available_templates: List[Dict[str, str]] = Field(default_factory=list)
+    kb_snippets: List[str] = Field(default_factory=list)
+    last_action_feedback: Optional[str] = None
+    task_instructions: str
+    sla_status: str = "ok"   # 'ok' | 'warning' | 'breached'
+    customer_sentiment: CustomerSentiment = CustomerSentiment.NEUTRAL
+    # Simulated customer reply generated after agent speaks
+    customer_followup: Optional[str] = None
+    # Live checklist of grader sub-objectives — gives the agent a learning signal
+    progress_hints: Dict[str, bool] = Field(default_factory=dict)
 
-
-# ---------------------------------------------------------------------------
-# Step / Reset / State result models
-# ---------------------------------------------------------------------------
 
 class StepResult(BaseModel):
     observation: SupportObservation
@@ -152,3 +137,5 @@ class StateResult(BaseModel):
     done: bool
     task_name: str
     grader_scores: Dict[str, float] = Field(default_factory=dict)
+    progress_hints: Dict[str, bool] = Field(default_factory=dict)
+    sla_status: str = "ok"

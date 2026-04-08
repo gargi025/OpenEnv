@@ -1,10 +1,12 @@
 name: customer-support-ticket-resolution
-version: "1.0.0"
+version: "2.0.0"
 description: >
-  An OpenEnv environment that simulates a real-world customer support ticket
-  resolution workflow. An AI agent acts as a support specialist, handling
-  tickets across three difficulty levels: password reset (easy), billing
-  dispute (medium), and multi-issue enterprise escalation (hard).
+  An OpenEnv environment simulating real-world customer support ticket resolution.
+  An AI agent acts as a support specialist handling tickets across five tasks at
+  four difficulty levels: easy, medium, hard, and expert. Features include dense
+  per-step rewards, SLA pressure with breach penalties, dynamic customer sentiment
+  simulation, simulated multi-turn customer conversations, trajectory-aware graders
+  with progress hints, and an efficiency bonus for faster resolution.
 
 tags:
   - openenv
@@ -12,6 +14,9 @@ tags:
   - nlp
   - real-world
   - multi-task
+  - multi-turn
+  - sla
+  - sentiment
 
 author: OpenEnv Participant
 
@@ -19,56 +24,101 @@ tasks:
   - name: password-reset-easy
     difficulty: easy
     max_steps: 6
+    ideal_steps: 3
     description: >
-      Resolve a straightforward password-reset ticket. Categorize, set priority,
-      reply with actionable steps, and close the ticket.
+      Resolve a password-reset ticket. Agent must categorize, set priority,
+      send an actionable reply, and close the ticket. Grader scores only explicit
+      agent actions — not the initial ticket state.
 
   - name: billing-dispute-medium
     difficulty: medium
     max_steps: 8
+    ideal_steps: 4
     description: >
-      Handle a Pro-tier customer reporting a duplicate charge. Acknowledge
-      frustration, reference specific order IDs, process or escalate a refund,
-      and resolve the ticket.
+      Handle a duplicate-charge billing dispute. Agent must show empathy,
+      categorize correctly, reference both order IDs, initiate a refund,
+      offer goodwill compensation, and resolve.
 
   - name: enterprise-escalation-hard
     difficulty: hard
     max_steps: 10
+    ideal_steps: 5
     description: >
-      Triage a critical enterprise customer ($180k ARR) reporting simultaneous
-      API outage, billing overage, and data loss while threatening cancellation.
-      Requires multi-issue triage, SLA-aware escalation, and churn prevention.
+      Triage a critical enterprise customer reporting simultaneous API outage,
+      billing overage, and data loss while threatening contract cancellation.
+      Requires multi-issue triage, SLA-aware escalation, churn prevention,
+      and executive sync coordination.
+
+  - name: security-incident-expert
+    difficulty: expert
+    max_steps: 10
+    ideal_steps: 5
+    description: >
+      Handle a potential security breach for a SOC2/PCI-DSS fintech customer.
+      Agent must lock the account, alert the security team, advise MFA,
+      address regulatory obligations, and — critically — must NOT prematurely
+      confirm a breach before forensic review (negative reward mechanic).
+
+  - name: shipping-dispute-expert
+    difficulty: expert
+    max_steps: 8
+    ideal_steps: 4
+    description: >
+      Resolve a missing-package dispute for a loyal 3-year customer with a
+      low fraud score. Agent must acknowledge loyalty, apply the loyalty policy
+      (immediate reship/refund), avoid excessive verification, and offer goodwill.
 
 observation_space:
   type: structured
-  description: >
-    JSON object containing the current ticket (with full conversation history),
-    step number, max steps, available canned-response templates, relevant
-    knowledge-base snippets, feedback on the last action, and task instructions.
+  schema:
+    ticket: "Full ticket object with conversation history, metadata, SLA config, sentiment"
+    step_number: int
+    max_steps: int
+    steps_remaining: int
+    available_templates: "List of canned response templates [{id, name, preview}]"
+    kb_snippets: "Relevant knowledge-base snippets for this ticket"
+    last_action_feedback: "Human-readable feedback on the previous action"
+    task_instructions: "Natural language description of agent objectives"
+    sla_status: "'ok' | 'warning' | 'breached'"
+    customer_sentiment: "'angry' | 'frustrated' | 'neutral' | 'satisfied' | 'delighted'"
+    customer_followup: "Simulated customer reply after agent spoke (or null)"
+    progress_hints: "Dict[str, bool] — live checklist of grader sub-objectives"
 
 action_space:
   type: structured
-  description: >
-    JSON object with action_type (one of: reply, categorize, set_priority,
-    escalate, resolve, request_info, apply_template) and optional fields
-    (reply_text, category, priority, template_id, escalation_reason,
-    resolution_summary).
+  actions:
+    reply:              "Send a reply to the customer (reply_text required)"
+    categorize:         "Set ticket category (category required)"
+    set_priority:       "Set ticket priority (priority required)"
+    escalate:           "Escalate to human agent (escalation_reason recommended)"
+    resolve:            "Mark ticket resolved (resolution_summary recommended)"
+    request_info:       "Ask customer for more info (reply_text required)"
+    apply_template:     "Use a canned response (template_id required)"
+    add_note:           "Add internal note not sent to customer (note_text required)"
+    offer_compensation: "Proactively offer credit/refund (compensation_amount + reply_text)"
 
 reward:
   type: dense
   range: [0.0, 1.0]
   description: >
-    Per-step rewards for meaningful actions (correct categorization, empathetic
-    replies, priority setting, template use). Penalties for wrong category or
-    redundant actions. Terminal grader bonus (up to +0.30) based on holistic
-    episode quality.
+    Per-step rewards for meaningful actions: correct categorization (+0.10),
+    priority setting (+0.07), substantive replies (+0.08–0.12), template use (+0.05),
+    compensation (+0.07), sentiment improvements (+0.04 per level).
+    Penalties: wrong category (-0.08), redundant actions (-0.04), short replies (-0.02),
+    SLA breach (-0.10 to -0.20 depending on tier, applied once).
+    Terminal grader bonus: up to +0.35 based on holistic episode quality.
+    Graders score AGENT ACTIONS only — initial ticket state never contributes to score.
 
 endpoints:
-  reset: POST /reset
-  step:  POST /step
-  state: GET  /state
+  reset:     POST /reset
+  step:      POST /step
+  state:     GET  /state
+  tasks:     GET  /tasks
+  health:    GET  /health
+  reset_all: POST /reset_all
 
 runtime:
   framework: fastapi
   python: "3.11"
   port: 7860
+  workers: 1
