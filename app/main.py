@@ -66,6 +66,13 @@ def root():
         "message": "Customer Support Environment API",
         "endpoints": ["/reset", "/step", "/state"]
     }
+
+@app.get("/")
+def root():
+    return {
+        "message": "Customer Support Environment API",
+        "endpoints": ["/reset", "/step", "/state"]
+    }
 @app.get("/health")
 async def health():
     return {
