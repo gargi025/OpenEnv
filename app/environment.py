@@ -10,7 +10,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from .app.models import (
+from .models import (
     ActionType,
     CustomerMessage,
     ResetResult,
