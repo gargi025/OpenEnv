@@ -60,7 +60,12 @@ app = FastAPI(
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-
+@app.get("/")
+def root():
+    return {
+        "message": "Customer Support Environment API",
+        "endpoints": ["/reset", "/step", "/state"]
+    }
 @app.get("/health")
 async def health():
     return {
