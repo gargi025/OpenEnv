@@ -29,7 +29,7 @@ from openai import OpenAI
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "dummy")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-ENV_URL      = os.getenv("SUPPORT_ENV_URL", "http://localhost:7860").rstrip("/")
+ENV_URL = os.getenv("SUPPORT_ENV_URL", "https://Gargi025-openenv.hf.space").rstrip("/")
 BENCHMARK    = "customer-support"
 SUCCESS_THRESHOLD = 0.30
 
@@ -254,6 +254,14 @@ def run_episode(env: EnvClient, llm: OpenAI, task: str, sid: str) -> None:
     finally:
         log_end(success, steps, score, rewards)
 
+import signal
+
+def _timeout_handler(sig, frame):
+    print("[END] success=false steps=0 score=0.000 rewards=", flush=True)
+    sys.exit(1)
+
+signal.signal(signal.SIGALRM, _timeout_handler)
+signal.alarm(18 * 60)
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------

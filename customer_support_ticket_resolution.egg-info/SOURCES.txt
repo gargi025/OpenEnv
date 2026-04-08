@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/environment.py
+app/main.py
+app/models.py
+app/tasks.py
+customer_support_ticket_resolution.egg-info/PKG-INFO
+customer_support_ticket_resolution.egg-info/SOURCES.txt
+customer_support_ticket_resolution.egg-info/dependency_links.txt
+customer_support_ticket_resolution.egg-info/entry_points.txt
+customer_support_ticket_resolution.egg-info/requires.txt
+customer_support_ticket_resolution.egg-info/top_level.txt
+tests/test_environment.py

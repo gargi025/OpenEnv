@@ -1,0 +1,7 @@
+tests/
+inference.py
+validate-submission.sh
+README.md
+*.pyc
+__pycache__
+.git

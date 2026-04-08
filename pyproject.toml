@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "customer-support-ticket-resolution"
+version = "2.0.0"
+description = "An OpenEnv environment simulating real-world customer support ticket resolution."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.5",
+    "uvicorn[standard]==0.32.1",
+    "pydantic==2.10.3",
+    "openai>=2.7.2",
+    "httpx==0.28.1",
+    "python-multipart==0.0.20",
+    "openenv-core>=0.2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[project.scripts]
+server = "server.app:main"

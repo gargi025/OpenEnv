@@ -89,6 +89,20 @@ def _efficiency_bonus(steps_used: int, max_steps: int, ideal_steps: int) -> floa
     ratio = (max_steps - steps_used) / max(max_steps - ideal_steps, 1)
     return round(max(0.0, 0.12 * ratio), 4)
 
+def _resolved_after_reply(history: List[Dict]) -> bool:
+    """True if agent replied at least once before resolving."""
+    if not history:
+        return False  # required: all hints must be False on empty history
+
+    actions = [h["action"].action_type for h in history]
+    reply_types = {ActionType.REPLY, ActionType.REQUEST_INFO, ActionType.APPLY_TEMPLATE}
+
+    if ActionType.RESOLVE not in actions:
+        return False  # not resolved yet → hint stays False
+
+    resolve_idx = actions.index(ActionType.RESOLVE)
+    return any(a in reply_types for a in actions[:resolve_idx])
+
 
 # =============================================================================
 # TASK 1 — EASY: Password Reset
@@ -191,7 +205,13 @@ def _grader_1(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     score += eff
     hints["efficient_resolution"] = eff >= 0.08
 
-    return round(min(score, 1.0), 4), hints
+    hints["resolved_after_reply"] = _resolved_after_reply(history)
+    if not hints["resolved_after_reply"]:
+        score -= 0.10
+
+
+
+    return round(max(0.0, min(score, 1.0)), 4), hints
 
 
 TASK_1 = {
@@ -328,8 +348,10 @@ def _grader_2(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     hints["priority_set"] = _agent_set_priority(history)
     if hints["priority_set"]:
         score += 0.15
-
-    return round(min(score, 1.0), 4), hints
+    hints["resolved_after_reply"] = _resolved_after_reply(history)
+    if not hints["resolved_after_reply"]:
+        score -= 0.10
+    return round(max(0.0, min(score, 1.0)), 4), hints
 
 
 TASK_2 = {
@@ -479,8 +501,11 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     hints["ticket_closed"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
     if hints["ticket_closed"]:
         score += 0.15
+    hints["resolved_after_reply"] = _resolved_after_reply(history)
+    if not hints["resolved_after_reply"]:
+        score -= 0.10
 
-    return round(min(score, 1.0), 4), hints
+    return round(max(0.0, min(score, 1.0)), 4), hints
 
 
 TASK_3 = {
@@ -638,8 +663,11 @@ def _grader_4(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     hints["ticket_closed"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
     if hints["ticket_closed"]:
         score += 0.10
+    hints["resolved_after_reply"] = _resolved_after_reply(history)
+    if not hints["resolved_after_reply"]:
+        score -= 0.10
 
-    return round(min(score, 1.0), 4), hints
+    return round(max(0.0, min(score, 1.0)), 4), hints
 
 
 TASK_4 = {
@@ -801,8 +829,11 @@ def _grader_5(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     hints["priority_set"] = _agent_set_priority(history)
     if hints["priority_set"]:
         score += 0.10
+    hints["resolved_after_reply"] = _resolved_after_reply(history)
+    if not hints["resolved_after_reply"]:
+        score -= 0.10
 
-    return round(min(score, 1.0), 4), hints
+    return round(max(0.0, min(score, 1.0)), 4), hints
 
 
 TASK_5 = {
