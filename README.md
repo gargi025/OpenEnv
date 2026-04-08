@@ -3,6 +3,7 @@ title: OpenEnv
 emoji: 👀
 colorFrom: indigo
 colorTo: indigo
+tags: [openenv]
 sdk: docker
 pinned: false
 short_description: 'Build a complete, real-world OpenEnv environment that an AI '

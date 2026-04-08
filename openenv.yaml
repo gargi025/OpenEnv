@@ -1,0 +1,74 @@
+name: customer-support-ticket-resolution
+version: "1.0.0"
+description: >
+  An OpenEnv environment that simulates a real-world customer support ticket
+  resolution workflow. An AI agent acts as a support specialist, handling
+  tickets across three difficulty levels: password reset (easy), billing
+  dispute (medium), and multi-issue enterprise escalation (hard).
+
+tags:
+  - openenv
+  - customer-support
+  - nlp
+  - real-world
+  - multi-task
+
+author: OpenEnv Participant
+
+tasks:
+  - name: password-reset-easy
+    difficulty: easy
+    max_steps: 6
+    description: >
+      Resolve a straightforward password-reset ticket. Categorize, set priority,
+      reply with actionable steps, and close the ticket.
+
+  - name: billing-dispute-medium
+    difficulty: medium
+    max_steps: 8
+    description: >
+      Handle a Pro-tier customer reporting a duplicate charge. Acknowledge
+      frustration, reference specific order IDs, process or escalate a refund,
+      and resolve the ticket.
+
+  - name: enterprise-escalation-hard
+    difficulty: hard
+    max_steps: 10
+    description: >
+      Triage a critical enterprise customer ($180k ARR) reporting simultaneous
+      API outage, billing overage, and data loss while threatening cancellation.
+      Requires multi-issue triage, SLA-aware escalation, and churn prevention.
+
+observation_space:
+  type: structured
+  description: >
+    JSON object containing the current ticket (with full conversation history),
+    step number, max steps, available canned-response templates, relevant
+    knowledge-base snippets, feedback on the last action, and task instructions.
+
+action_space:
+  type: structured
+  description: >
+    JSON object with action_type (one of: reply, categorize, set_priority,
+    escalate, resolve, request_info, apply_template) and optional fields
+    (reply_text, category, priority, template_id, escalation_reason,
+    resolution_summary).
+
+reward:
+  type: dense
+  range: [0.0, 1.0]
+  description: >
+    Per-step rewards for meaningful actions (correct categorization, empathetic
+    replies, priority setting, template use). Penalties for wrong category or
+    redundant actions. Terminal grader bonus (up to +0.30) based on holistic
+    episode quality.
+
+endpoints:
+  reset: POST /reset
+  step:  POST /step
+  state: GET  /state
+
+runtime:
+  framework: fastapi
+  python: "3.11"
+  port: 7860
