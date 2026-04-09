@@ -67,6 +67,25 @@ class SupportEnvironment:
     _P_SHORT_REPLY      = -0.02
     _P_TOOL_REDUNDANT   = -0.03  # calling the same tool twice
 
+    # ---- Advanced reward shaping weights ----
+    _R_SENTIMENT_WEIGHTED = 0.03  # Additional reward based on sentiment difficulty
+    _R_SLA_URGENCY_BONUS = 0.05   # Bonus for resolving before warn_step
+    _R_POLICY_ADHERENCE = 0.04     # Bonus for policy-compliant keywords
+    _R_CONTEXTUAL_TOOL = 0.03      # Bonus for using tool before replying
+    _R_TOOL_RESULT_USED = 0.03    # Bonus for referencing tool result in reply
+    _P_ANTI_PATTERN = -0.06       # Penalty for common mistakes
+
+    # Policy-compliant keywords for different task types
+    _POLICY_KEYWORDS = {
+        "billing": ["refund", "credit", "duplicate", "charge", "apologize", "compensation"],
+        "security": ["lock", "mfa", "forensic", "investigation", "cannot confirm", "security team"],
+        "technical": ["webhook", "endpoint", "deprecated", "migration", "v2", "workaround"],
+        "retention": ["understand", "alternative", "value", "pause", "downgrade", "appreciate"],
+        "compliance": ["verify", "gdpr", "ccpa", "30 days", "retention", "audit", "reference"],
+        "shipping": ["loyal", "reship", "tracking", "fedex", "goodwill", "appreciate"],
+        "enterprise": ["escalate", "incident", "csm", "executive", "sla", "critical"],
+    }
+
     def __init__(self, task_name: str) -> None:
         if task_name not in TASKS:
             raise ValueError(f"Unknown task '{task_name}'. Available: {list(TASKS)}")
@@ -85,6 +104,8 @@ class SupportEnvironment:
         self._last_tool_result: Optional[ToolResult] = None
         self._tool_responses: Dict[ActionType, Callable] = {}
         self._instructions: str = ""
+        self._last_tool_used: Optional[ActionType] = None  # Track tool-use for contextual rewards
+        self._resolved_before_warn: bool = False  # Track SLA urgency bonus
 
     # ------------------------------------------------------------------
     # Public API
@@ -122,6 +143,8 @@ class SupportEnvironment:
         self._progress_hints = {}
         self._sla_status = "ok"
         self._last_tool_result = None
+        self._last_tool_used = None
+        self._resolved_before_warn = False
 
         return ResetResult(
             observation=self._build_obs(feedback=None, followup=None),
@@ -157,7 +180,7 @@ class SupportEnvironment:
 
             return StepResult(
                 observation=self._build_obs(feedback, None),
-                reward=min(max(round(reward, 4), 0.0), 1.0),
+                reward=min(max(round(reward, 4), -1.0), 1.0),
                 done=False,
                 info={
                     "step": self._step,
@@ -198,7 +221,7 @@ class SupportEnvironment:
 
         return StepResult(
             observation=self._build_obs(feedback, followup),
-            reward=min(max(round(reward, 4), 0.0), 1.0),
+            reward=min(max(round(reward, 4), -1.0), 1.0),
             done=self._done,
             info={
                 "step": self._step,
@@ -260,9 +283,17 @@ class SupportEnvironment:
             feedback = f"Tool '{at.value}' succeeded."
             if result.confirmation_id:
                 feedback += f" Confirmation: {result.confirmation_id}."
+
+            # Bonus for using tools in good sequence (tools before replies)
+            if not self._first_reply_done:
+                reward += self._R_CONTEXTUAL_TOOL
+                feedback += " Contextual tool-use bonus (used before replying)."
         else:
             reward = 0.0
             feedback = f"Tool '{at.value}' failed: {result.error}"
+
+        # Track tool use for contextual reward
+        self._last_tool_used = at
 
         return reward, feedback, result
 
@@ -311,6 +342,12 @@ class SupportEnvironment:
         at = action.action_type
         prev = self._action_counts.get(at, 0)
 
+        # Track anti-patterns
+        anti_pattern_penalty = self._check_anti_patterns(action)
+        if anti_pattern_penalty < 0:
+            r += anti_pattern_penalty
+            msgs.append("Anti-pattern detected.")
+
         if prev >= 2 and at not in {ActionType.REPLY, ActionType.REQUEST_INFO, ActionType.ADD_NOTE}:
             r += self._P_REDUNDANT
             msgs.append(f"Redundant {at} (×{prev}).")
@@ -321,10 +358,31 @@ class SupportEnvironment:
                 r += self._P_SHORT_REPLY
                 msgs.append("Reply too short.")
             else:
-                r += self._R_REPLY_BASE
+                # Base reply reward with sentiment weighting
+                sentiment_idx = _SENTIMENT_SCALE.index(self._ticket.sentiment)
+                sentiment_multiplier = 1.0 + (sentiment_idx * 0.15)  # Harder to please angry customers = higher reward
+                base_reply = self._R_REPLY_BASE * sentiment_multiplier
+                r += round(base_reply, 4)
+
                 if len(text) >= 100:
                     r += self._R_REPLY_LENGTH
-                msgs.append(f"Reply sent (len={len(text)}).")
+                msgs.append(f"Reply sent (len={len(text)}, sentiment={self._ticket.sentiment.value}).")
+
+                # Check for policy adherence
+                policy_bonus = self._check_policy_adherence(text)
+                if policy_bonus > 0:
+                    r += policy_bonus
+                    msgs.append("Policy keywords detected.")
+
+                # Check if tool result is referenced in reply
+                if self._last_tool_used and self._last_tool_result:
+                    if self._last_tool_result.confirmation_id and self._last_tool_result.confirmation_id.lower() in text.lower():
+                        r += self._R_TOOL_RESULT_USED
+                        msgs.append("Tool confirmation referenced.")
+
+                # Reset contextual tool tracking after reply
+                self._last_tool_used = None
+
             if not self._first_reply_done and len(text) >= 20:
                 self._first_reply_done = True
 
@@ -364,8 +422,73 @@ class SupportEnvironment:
 
         elif at == ActionType.RESOLVE:
             msgs.append("Resolve received — grader bonus at episode end.")
+            # Check SLA urgency bonus
+            if self._step < self._ticket.sla.warn_step:
+                r += self._R_SLA_URGENCY_BONUS
+                msgs.append("SLA urgency bonus (resolved before warning).")
+                self._resolved_before_warn = True
 
-        return round(r, 4), " | ".join(msgs) or "Action processed."
+        return round(min(max(r, -1.0), 1.0), 4), " | ".join(msgs) or "Action processed."
+
+    def _check_anti_patterns(self, action: SupportAction) -> float:
+        """Check for common support mistakes and return penalty."""
+        penalty = 0.0
+        at = action.action_type
+
+        # Anti-pattern: Asking for info already in the ticket
+        if at in {ActionType.REPLY, ActionType.REQUEST_INFO} and action.reply_text:
+            text = action.reply_text.lower()
+            ticket_content = " ".join([m.content for m in self._ticket.conversation]).lower()
+
+            # Check if asking for order ID when already provided
+            if "order id" in text or "what is your order" in text:
+                for meta_key in ["order_id", "orders"]:
+                    if meta_key in self._ticket.metadata:
+                        penalty = self._P_ANTI_PATTERN
+                        break
+
+            # Check if asking for email when already in ticket
+            if "email address" in text and self._ticket.customer_email:
+                penalty = self._P_ANTI_PATTERN
+
+        # Anti-pattern: Resolving without any customer communication
+        if at == ActionType.RESOLVE:
+            agent_replies = [h for h in self._history if h["action"].action_type in
+                           {ActionType.REPLY, ActionType.APPLY_TEMPLATE, ActionType.OFFER_COMPENSATION}]
+            if not agent_replies:
+                penalty = self._P_ANTI_PATTERN * 1.5  # Higher penalty
+
+        # Anti-pattern: Escalating too early (before basic triage)
+        if at == ActionType.ESCALATE and self._step <= 1:
+            if not any(h["action"].action_type in {ActionType.CATEGORIZE, ActionType.SET_PRIORITY}
+                       for h in self._history):
+                penalty = self._P_ANTI_PATTERN * 0.5  # Smaller penalty
+
+        return penalty
+
+    def _check_policy_adherence(self, text: str) -> float:
+        """Check if reply contains policy-compliant keywords for the task type."""
+        if not text:
+            return 0.0
+
+        text_lower = text.lower()
+        task_name = self.task_name.lower()
+
+        # Determine which policy keywords to check
+        keywords = []
+        for category, kw_list in self._POLICY_KEYWORDS.items():
+            if category in task_name:
+                keywords = kw_list
+                break
+
+        if not keywords:
+            return 0.0
+
+        # Count keyword hits
+        hits = sum(1 for kw in keywords if kw.lower() in text_lower)
+        if hits >= 2:
+            return self._R_POLICY_ADHERENCE
+        return 0.0
 
     def _apply_action(self, action: SupportAction) -> Optional[str]:
         """Mutate ticket state; return simulated customer followup or None."""

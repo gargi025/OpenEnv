@@ -684,6 +684,7 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.10 — SET_PRIORITY to critical
       0.08 — empathetic tone
       0.08 — policy checked via tool
+      0.06 — policy content referenced in reply (Platinum SLA, 10% credit, executive sync, CSM)
       0.10 — sequencing correct
       0.05 — ticket closed
     """
@@ -691,7 +692,7 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
         return 0.0, {k: False for k in [
             "escalated", "all_issues_addressed", "sla_referenced",
             "retention_handled", "priority_set_critical", "empathy_shown",
-            "policy_checked", "sequencing_correct", "ticket_closed",
+            "policy_checked", "policy_referenced", "sequencing_correct", "ticket_closed",
         ]}
 
     score = 0.0
@@ -738,6 +739,11 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     hints["policy_checked"] = _tool_was_used(history, ActionType.CHECK_POLICY)
     if hints["policy_checked"]:
         score += 0.08
+
+    # Verify policy content was actually referenced in reply (not just tool called)
+    hints["policy_referenced"] = _kw(texts, ["platinum", "10%", "executive sync", "csm", "vp sales"]) >= 2
+    if hints["policy_referenced"]:
+        score += 0.06
 
     hints["sequencing_correct"] = _resolved_after_reply(history)
     if hints["sequencing_correct"]:
@@ -1263,13 +1269,705 @@ TASK_5 = {
 
 
 # =============================================================================
+# TASK 6 — HARD: Technical Integration / Webhook Failure
+# =============================================================================
+
+_KB_6 = [
+    "Webhook delivery failures: Check endpoint URL, SSL certificate validity, and HTTP response codes.",
+    "Retry policy: Exponential backoff (1s, 2s, 4s, 8s) — total 4 attempts over 15 seconds.",
+    "HTTP 410 Gone: Endpoint permanently removed — customer must update webhook URL.",
+    "Payload signature: Verify X-Signature header using shared secret; timestamp must be within 5 min.",
+    "Developer documentation: webhook_events.md, troubleshooting_guide.md, migration_guide.md.",
+    "Incident INC-WEB: Ongoing webhook degradation affecting 12% of traffic since 09:00 UTC.",
+    "API version deprecation: v1 endpoints sunset on 2026-06-01 — migrate to v2.",
+]
+
+_TEMPLATES_6 = [
+    {"id": "webhook_diagnosis", "name": "Webhook Diagnosis",
+     "preview": "Hi {name}, I've identified the webhook delivery failure. Let me walk you through the fix."},
+    {"id": "migration_guide", "name": "API Migration Guide",
+     "preview": "Hi {name}, your integration is using a deprecated v1 endpoint. Here's the v2 migration path."},
+    {"id": "incident_update", "name": "Incident Status Update",
+     "preview": "Hi {name}, this relates to known incident INC-WEB. Current status and workaround inside."},
+]
+
+_FOLLOWUPS_6 = {
+    ActionType.REPLY: "Thanks for the detailed response. We'll implement the fix and monitor. Please send the updated endpoint when ready.",
+    ActionType.APPLY_TEMPLATE: "The template helps, but we need specific steps for our stack (Python/FastAPI).",
+    ActionType.REQUEST_INFO: "Our current endpoint is https://api.customer.com/webhooks/v1/receive. No recent changes on our end.",
+    ActionType.ESCALATE: "Understood. Please loop in your engineering team — this is blocking our production deploys.",
+    ActionType.RESOLVE: "We'll test the workaround and update if issues persist. Thanks for the technical support!",
+}
+
+
+def _tool_responses_6(ticket: Ticket):
+    endpoint = ticket.metadata.get("webhook_endpoint", "")
+    return {
+        ActionType.CHECK_POLICY: lambda t: ToolResult(
+            action_type="check_policy",
+            success=True,
+            data={
+                "policy": "webhook_troubleshooting",
+                "text": (
+                    "Webhook diagnostics: (1) Check SSL cert validity, (2) Verify endpoint returns 200, "
+                    "(3) Confirm X-Signature header present, (4) Check retry logs. "
+                    "Incident INC-WEB: Ongoing degradation, ETA resolution 2 hours. "
+                    "Migration: v1 endpoints deprecated, use v2/webhook/receive with new signature format."
+                ),
+            },
+        ),
+        ActionType.LOOKUP_ORDER: lambda t: ToolResult(
+            action_type="lookup_order",
+            success=True,
+            data={
+                "webhook_logs": {
+                    "endpoint": endpoint,
+                    "last_24h": {
+                        "delivered": 12,
+                        "failed": 89,
+                        "last_error": "HTTP 410 Gone",
+                        "last_attempt": "2026-04-09T08:45:00Z",
+                    },
+                    "ssl_status": "valid",
+                    "signature_verification": "failed — v1 signature format deprecated",
+                },
+            },
+        ),
+    }
+
+
+def _build_ticket_6() -> Ticket:
+    name, email = _random_name()
+    integration_type = random.choice(["Stripe", "Shopify", "Zapier", "Custom API"])
+    webhook_url = f"https://api.{email.split('@')[1]}/webhooks/v1/receive"
+    incident_id = f"INC-WEB-{random.randint(1000, 9999)}"
+    return Ticket(
+        ticket_id=_random_ticket_id(),
+        subject=f"URGENT: Webhooks failing for {integration_type} integration — blocking production",
+        customer_name=name,
+        customer_email=email,
+        priority=TicketPriority.HIGH,
+        category=TicketCategory.TECHNICAL,
+        status=TicketStatus.OPEN,
+        sentiment=CustomerSentiment.FRUSTRATED,
+        conversation=[CustomerMessage(
+            sender="customer",
+            content=(
+                f"Our {integration_type} webhooks have been failing since this morning. "
+                f"Endpoint: {webhook_url}. We're receiving HTTP 410 Gone errors. "
+                f"This is blocking our order processing pipeline. "
+                f"We see incident {incident_id} mentioned on your status page. "
+                f"Need immediate workaround or ETA for fix."
+            ),
+            timestamp=_now(),
+        )],
+        metadata={
+            "integration_type": integration_type,
+            "webhook_endpoint": webhook_url,
+            "http_status": "410 Gone",
+            "incident_id": incident_id,
+            "affected_since": "2026-04-09T09:00:00Z",
+            "api_version": "v1",
+            "customer_tier": "developer",
+        },
+        sla=SLAConfig(tier="developer", warn_step=2, breach_step=6, breach_penalty=0.15),
+        tags=["technical", "webhooks", "integration", "api"],
+    )
+
+
+def _grader_6(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, bool]]:
+    """
+    Technical task grader:
+      0.15 — HTTP 410/Gone identified as root cause
+      0.15 — v1 deprecation explained, v2 migration offered
+      0.12 — incident referenced (INC-WEB-XXXX)
+      0.10 — specific endpoint diagnosed
+      0.12 — technical workaround provided
+      0.10 — developer empathy (understand urgency)
+      0.08 — escalation offered for production blockers
+      0.08 — ticket closed properly
+      0.10 — sequencing correct
+    """
+    if not history:
+        return 0.0, {k: False for k in [
+            "root_cause_identified", "v2_migration_offered", "incident_referenced",
+            "endpoint_diagnosed", "workaround_provided", "developer_empathy",
+            "escalation_offered", "ticket_closed", "sequencing_correct",
+        ]}
+
+    score = 0.0
+    hints: Dict[str, bool] = {}
+    texts = _action_texts(history)
+
+    incident_id = ticket.metadata.get("incident_id", "INC-WEB-0000")
+    endpoint = ticket.metadata.get("webhook_endpoint", "")
+
+    hints["root_cause_identified"] = _kw(texts, ["410", "gone", "deprecated", "v1", "sunset"]) >= 1
+    if hints["root_cause_identified"]:
+        score += 0.15
+
+    hints["v2_migration_offered"] = _kw(texts, ["v2", "migrate", "migration", "upgrade", "new version"]) >= 1
+    if hints["v2_migration_offered"]:
+        score += 0.15
+
+    hints["incident_referenced"] = _kw(texts, [incident_id, "inc-web", "known issue", "status page"]) >= 1
+    if hints["incident_referenced"]:
+        score += 0.12
+
+    hints["endpoint_diagnosed"] = endpoint in " ".join(texts) or _kw(texts, ["endpoint", "url", "webhook"]) >= 1
+    if hints["endpoint_diagnosed"]:
+        score += 0.10
+
+    hints["workaround_provided"] = _kw(texts, ["workaround", "temporary", "poll", "retry", "exponential", "poll api"]) >= 1
+    if hints["workaround_provided"]:
+        score += 0.12
+
+    hints["developer_empathy"] = _kw(texts, ["blocking", "production", "urgent", "understand", "priority"]) >= 1
+    if hints["developer_empathy"]:
+        score += 0.10
+
+    hints["escalation_offered"] = _agent_did(history, ActionType.ESCALATE) or _kw(texts, ["escalate", "engineering", "on-call"]) >= 1
+    if hints["escalation_offered"]:
+        score += 0.08
+
+    hints["sequencing_correct"] = _resolved_after_reply(history)
+    if hints["sequencing_correct"]:
+        score += 0.10
+    else:
+        score -= 0.10
+
+    hints["ticket_closed"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
+    if hints["ticket_closed"]:
+        score += 0.08
+
+    return round(min(max(score, 0.0), 1.0), 4), hints
+
+
+def _build_instructions_6(ticket: Ticket) -> str:
+    meta = ticket.metadata
+    integration = meta.get("integration_type", "API")
+    endpoint = meta.get("webhook_endpoint", "")
+    incident = meta.get("incident_id", "INC-WEB-0000")
+    return (
+        f"A developer reports {integration} webhook failures at {endpoint}.\n"
+        f"Error: HTTP 410 Gone. Related to ongoing incident {incident}.\n"
+        "Objectives:\n"
+        "1. Use CHECK_POLICY to get webhook troubleshooting guide.\n"
+        "2. Use LOOKUP_ORDER to check webhook delivery logs for their endpoint.\n"
+        "3. Identify v1 deprecation as root cause — explain HTTP 410 Gone.\n"
+        "4. Reference the incident number in your response.\n"
+        "5. Offer v2 migration path with new signature format.\n"
+        "6. Provide immediate workaround (polling fallback or exponential retry).\n"
+        "7. Show developer empathy — this is a production blocker.\n"
+        "8. Offer escalation to on-call engineering if needed.\n"
+        "This customer speaks technical language — be specific about HTTP codes and API versions."
+    )
+
+
+TASK_6 = {
+    "name": "technical-integration-hard",
+    "difficulty": "hard",
+    "build_ticket": _build_ticket_6,
+    "ticket": _build_ticket_6(),
+    "instructions": _build_instructions_6,
+    "kb_snippets": _KB_6,
+    "available_templates": _TEMPLATES_6,
+    "followup_responses": _FOLLOWUPS_6,
+    "tool_responses": _tool_responses_6,
+    "max_steps": 10,
+    "ideal_steps": 5,
+    "grader": _grader_6,
+}
+
+
+# =============================================================================
+# TASK 7 — MEDIUM: Subscription Retention / Churn Prevention
+# =============================================================================
+
+_KB_7 = [
+    "Churn prevention: First acknowledge frustration, then explore root cause before offering solutions.",
+    "Downgrade option: Offer to pause or downgrade instead of cancel — retains customer relationship.",
+    "Win-back playbook: 20% discount for 3 months, feature unlock, or dedicated CSM assignment.",
+    "Exit interview: Ask specific reason — price, features, competitor, or changing needs.",
+    "Competitor intelligence: If mentioning competitor, highlight differentiating features.",
+    "Cancellation terms: Annual plans may have early termination fees — offer credit instead.",
+    "Value recap: Remind customer of features used, data stored, integrations active.",
+]
+
+_TEMPLATES_7 = [
+    {"id": "retention_ack", "name": "Retention Acknowledgment",
+     "preview": "Hi {name}, I understand you're considering leaving — may I ask what led to this?"},
+    {"id": "value_recap", "name": "Value Recap",
+     "preview": "Hi {name}, before you go, let's review what you've built with us — it might surprise you."},
+    {"id": "winback_offer", "name": "Win-Back Offer",
+     "preview": "Hi {name}, I'd like to offer a 3-month discount and connect you with our product team."},
+    {"id": "pause_option", "name": "Pause Instead of Cancel",
+     "preview": "Hi {name}, instead of canceling, would pausing for 60 days work for your situation?"},
+]
+
+_FOLLOWUPS_7 = {
+    ActionType.REPLY: "Honestly, it's the price — we found a competitor at half the cost for our usage.",
+    ActionType.APPLY_TEMPLATE: "A discount would help, but I'm also concerned about the missing features.",
+    ActionType.REQUEST_INFO: "Mainly the reporting dashboard and the lack of team permissions.",
+    ActionType.OFFER_COMPENSATION: "That offer is generous. Let me discuss with my team and get back to you.",
+    ActionType.ESCALATE: "OK, I'll wait to hear from the retention specialist.",
+    ActionType.RESOLVE: "Actually, the pause option might work. Let me try that instead of canceling.",
+}
+
+
+def _build_ticket_7() -> Ticket:
+    name, email = _random_name()
+    plan = random.choice(["Pro", "Business", "Enterprise"])
+    monthly_value = random.choice([79, 149, 249, 399])
+    tenure_months = random.randint(8, 36)
+    competitor = random.choice(["CompetitorX", "RivalSoft", "AlternativeZ", None])
+    reason = random.choice(["price", "features", "competitor", "changing_needs", "not_using"])
+
+    content = f"I need to cancel my {plan} subscription effective immediately. "
+    if reason == "price":
+        content += f"The ${monthly_value}/month is too much for our current budget. "
+    elif reason == "features":
+        content += "We're missing key features that we need for our workflow. "
+    elif reason == "competitor":
+        content += f"We're switching to {competitor} which offers better value. "
+    elif reason == "changing_needs":
+        content += "Our business needs have changed and this no longer fits. "
+    else:
+        content += "We haven't been using the platform enough to justify the cost. "
+
+    content += f"I've been a customer for {tenure_months} months. Please confirm cancellation."
+
+    return Ticket(
+        ticket_id=_random_ticket_id(),
+        subject=f"Request to cancel {plan} subscription",
+        customer_name=name,
+        customer_email=email,
+        priority=TicketPriority.MEDIUM,
+        category=TicketCategory.ACCOUNT,
+        status=TicketStatus.OPEN,
+        sentiment=CustomerSentiment.FRUSTRATED,
+        conversation=[CustomerMessage(
+            sender="customer",
+            content=content,
+            timestamp=_now(),
+        )],
+        metadata={
+            "plan": plan,
+            "monthly_value": monthly_value,
+            "tenure_months": tenure_months,
+            "annual_contract": tenure_months >= 12,
+            "cancellation_reason": reason,
+            "competitor_mentioned": competitor,
+            "features_used": ["dashboard", "reports", "api"],
+            "data_volume_gb": random.randint(5, 500),
+            "integrations_active": random.randint(2, 8),
+        },
+        sla=SLAConfig(tier="retention", warn_step=2, breach_step=8, breach_penalty=0.12),
+        tags=["retention", "churn-risk", "cancellation"],
+    )
+
+
+def _grader_7(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, bool]]:
+    """
+    Retention task grader:
+      0.12 — exit reason explored (asked why)
+      0.12 — value recap provided (features, data, integrations)
+      0.15 — alternative offered (pause, downgrade, not cancel)
+      0.15 — win-back offer made (discount, CSM, features)
+      0.10 — competitor addressed (if mentioned)
+      0.12 — empathetic tone throughout
+      0.08 — resolution found (saved, paused, or gracefully closed)
+      0.08 — sequencing correct
+      0.08 — priority/category set
+    """
+    if not history:
+        return 0.0, {k: False for k in [
+            "exit_reason_explored", "value_recap_provided", "alternative_offered",
+            "winback_offered", "competitor_addressed", "empathetic_tone",
+            "resolution_found", "sequencing_correct", "metadata_set",
+        ]}
+
+    score = 0.0
+    hints: Dict[str, bool] = {}
+    texts = _action_texts(history)
+
+    integrations = ticket.metadata.get("integrations_active", 0)
+    competitor = ticket.metadata.get("competitor_mentioned")
+
+    hints["exit_reason_explored"] = _kw(texts, ["why", "reason", "led to", "what happened", "changed"]) >= 1
+    if hints["exit_reason_explored"]:
+        score += 0.12
+
+    hints["value_recap_provided"] = _kw(texts, ["built", "created", "used", "data", "integrations", str(integrations)]) >= 2
+    if hints["value_recap_provided"]:
+        score += 0.12
+
+    hints["alternative_offered"] = _kw(texts, ["pause", "downgrade", "instead of cancel", "alternative", "options"]) >= 1
+    if hints["alternative_offered"]:
+        score += 0.15
+
+    hints["winback_offered"] = (
+        _agent_did(history, ActionType.OFFER_COMPENSATION) or
+        _kw(texts, ["discount", "credit", "csm", "dedicated", "product team", "unlock"]) >= 1
+    )
+    if hints["winback_offered"]:
+        score += 0.15
+
+    if competitor:
+        hints["competitor_addressed"] = _kw(texts, [competitor.lower(), "different", "unique", "advantage", "compare"]) >= 1
+    else:
+        hints["competitor_addressed"] = True  # N/A
+    if hints["competitor_addressed"]:
+        score += 0.10
+
+    hints["empathetic_tone"] = _kw(texts, ["understand", "sorry", "hear", "appreciate", "valued"]) >= 2
+    if hints["empathetic_tone"]:
+        score += 0.12
+
+    hints["resolution_found"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
+    if hints["resolution_found"]:
+        score += 0.08
+
+    hints["sequencing_correct"] = _resolved_after_reply(history)
+    if hints["sequencing_correct"]:
+        score += 0.08
+    else:
+        score -= 0.08
+
+    hints["metadata_set"] = _agent_set_priority(history) or _agent_categorized_as(history, TicketCategory.ACCOUNT)
+    if hints["metadata_set"]:
+        score += 0.08
+
+    return round(min(max(score, 0.0), 1.0), 4), hints
+
+
+def _build_instructions_7(ticket: Ticket) -> str:
+    meta = ticket.metadata
+    plan = meta.get("plan", "Pro")
+    value = meta.get("monthly_value", 149)
+    tenure = meta.get("tenure_months", 12)
+    reason = meta.get("cancellation_reason", "price")
+    competitor = meta.get("competitor_mentioned")
+    integrations = meta.get("integrations_active", 0)
+
+    reason_text = {
+        "price": f"citing ${value}/month as too expensive",
+        "features": "citing missing features they need",
+        "competitor": f"wants to switch to {competitor}",
+        "changing_needs": "citing changing business needs",
+        "not_using": "saying they don't use the platform enough",
+    }.get(reason, "unspecified reason")
+
+    comp_line = f"\nCustomer mentioned competitor: {competitor}." if competitor else ""
+
+    return (
+        f"A {tenure}-month customer wants to cancel their {plan} plan, {reason_text}.{comp_line}\n"
+        f"Customer has {integrations} active integrations and significant data stored.\n"
+        "Objectives:\n"
+        "1. Explore the exit reason — ask what led to this decision.\n"
+        "2. Provide a value recap — remind them what they've built (integrations, data).\n"
+        "3. Offer alternatives to cancellation (pause, downgrade, switch to annual).\n"
+        "4. Make a win-back offer (discount, dedicated CSM, feature unlock).\n"
+        "5. If competitor mentioned, highlight differentiating features.\n"
+        "6. Maintain empathetic, non-pushy tone throughout.\n"
+        "7. Find resolution: save, pause, or gracefully close.\n"
+        "Goal: Retain the customer through consultative support, not pressure."
+    )
+
+
+TASK_7 = {
+    "name": "subscription-retention-medium",
+    "difficulty": "medium",
+    "build_ticket": _build_ticket_7,
+    "ticket": _build_ticket_7(),
+    "instructions": _build_instructions_7,
+    "kb_snippets": _KB_7,
+    "available_templates": _TEMPLATES_7,
+    "followup_responses": _FOLLOWUPS_7,
+    "tool_responses": {},
+    "max_steps": 10,
+    "ideal_steps": 6,
+    "grader": _grader_7,
+}
+
+
+# =============================================================================
+# TASK 8 — EXPERT: GDPR / CCPA Data Deletion Request (Compliance)
+# =============================================================================
+
+_KB_8 = [
+    "GDPR Article 17: Right to erasure ('right to be forgotten') — must respond within 30 days.",
+    "CCPA: Consumer has right to deletion; business must verify identity before processing.",
+    "Verification required: Government ID OR last 4 digits of payment card + account creation date.",
+    "Exemptions: Active subscriptions, pending disputes, legal holds, incomplete transactions.",
+    "Data retention: Backups retained 90 days post-deletion; metadata retained for compliance.",
+    "Third-party sync: Must notify integrated services (Stripe, Salesforce, etc.) of deletion.",
+    "Audit trail: All deletion requests logged with timestamp, verification method, and executor.",
+    "Deletion confirmation: Send email with deletion reference and completion date.",
+]
+
+_TEMPLATES_8 = [
+    {"id": "verification_request", "name": "Verification Required",
+     "preview": "Hi {name}, before processing your deletion request, I need to verify your identity."},
+    {"id": "exemption_notice", "name": "Exemption Notice",
+     "preview": "Hi {name}, your account has an active subscription that must be canceled before deletion."},
+    {"id": "deletion_confirmed", "name": "Deletion Confirmed",
+     "preview": "Hi {name}, your data deletion request has been confirmed. Reference: DEL-XXXX."},
+    {"id": "retention_notice", "name": "Data Retention Notice",
+     "preview": "Hi {name}, some data is retained per legal requirements — details inside."},
+]
+
+_FOLLOWUPS_8 = {
+    ActionType.REPLY: "I've uploaded my driver's license to the secure portal. Please confirm receipt.",
+    ActionType.REQUEST_INFO: "I created my account in January 2022. I can provide the last 4 digits of my card.",
+    ActionType.APPLY_TEMPLATE: "The template explains the process well. How long will deletion take?",
+    ActionType.ESCALATE: "Understood. I'll wait for the compliance team to reach out.",
+    ActionType.RESOLVE: "Thank you for handling this promptly. I've saved the deletion reference.",
+}
+
+
+def _tool_responses_8(ticket: Ticket):
+    user_id = ticket.metadata.get("user_id", "USR-0000")
+    return {
+        ActionType.CHECK_POLICY: lambda t: ToolResult(
+            action_type="check_policy",
+            success=True,
+            data={
+                "policy": "gdpr_ccpa_deletion",
+                "text": (
+                    "GDRT/CCPA deletion protocol: (1) Verify identity (ID or card+date), "
+                    "(2) Check exemptions (active subs, legal holds), "
+                    "(3) Notify third-party integrations, "
+                    "(4) Queue deletion (30-day window), "
+                    "(5) Send confirmation with DEL-XXXX reference, "
+                    "(6) Log audit trail. Backups retained 90 days."
+                ),
+            },
+        ),
+        ActionType.LOOKUP_ORDER: lambda t: ToolResult(
+            action_type="lookup_order",
+            success=True,
+            data={
+                "account_status": {
+                    "user_id": user_id,
+                    "subscription_active": ticket.metadata.get("subscription_active", True),
+                    "subscription_tier": ticket.metadata.get("subscription_tier", "Pro"),
+                    "pending_transactions": ticket.metadata.get("pending_transactions", 0),
+                    "legal_hold": ticket.metadata.get("legal_hold", False),
+                    "data_volume_gb": ticket.metadata.get("data_volume_gb", 45),
+                    "integrations": ["Stripe", "Salesforce", "Zapier"],
+                },
+            },
+        ),
+    }
+
+
+def _build_ticket_8() -> Ticket:
+    name, email = _random_name()
+    user_id = f"USR-{random.randint(10000, 99999)}"
+    region = random.choice(["EU (GDPR)", "California (CCPA)", "UK (UK-GDPR)"])
+    reason = random.choice(["privacy_concerns", "moving_competitor", "account_cleanup", "data_breach_worries"])
+
+    reasons_text = {
+        "privacy_concerns": "I have privacy concerns and want all my data removed.",
+        "moving_competitor": "I'm switching to a competitor and want my data deleted.",
+        "account_cleanup": "I'm cleaning up old accounts. Please delete everything.",
+        "data_breach_worries": "After your recent data breach, I want my data deleted immediately.",
+    }
+
+    has_active_sub = random.choice([True, False])
+    pending = random.randint(0, 2) if random.random() < 0.3 else 0
+    legal_hold = random.random() < 0.15
+
+    content = (
+        f"I am requesting complete deletion of my account and all associated personal data under {region}. "
+        f"{reasons_text.get(reason, 'Please delete my account.')} "
+        f"My user ID is {user_id}. "
+        f"I expect confirmation within the required timeframe."
+    )
+
+    return Ticket(
+        ticket_id=_random_ticket_id(),
+        subject=f"Data deletion request under {region}",
+        customer_name=name,
+        customer_email=email,
+        priority=TicketPriority.HIGH,
+        category=TicketCategory.ACCOUNT,
+        status=TicketStatus.OPEN,
+        sentiment=CustomerSentiment.NEUTRAL,
+        conversation=[CustomerMessage(
+            sender="customer",
+            content=content,
+            timestamp=_now(),
+        )],
+        metadata={
+            "user_id": user_id,
+            "region": region,
+            "regulation": region.split()[0] if "GDPR" in region else "CCPA",
+            "deletion_reason": reason,
+            "subscription_active": has_active_sub,
+            "subscription_tier": random.choice(["Basic", "Pro", "Business"]) if has_active_sub else None,
+            "pending_transactions": pending,
+            "legal_hold": legal_hold,
+            "data_volume_gb": random.randint(5, 200),
+            "verification_provided": False,
+        },
+        sla=SLAConfig(tier="compliance", warn_step=2, breach_step=10, breach_penalty=0.20),
+        tags=["compliance", "gdpr", "ccpa", "deletion", "privacy"],
+    )
+
+
+def _grader_8(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, bool]]:
+    """
+    Compliance task grader:
+      0.15 — identity verification requested (legally required)
+      0.15 — exemptions checked (active sub, pending tx, legal hold)
+      0.12 — regulation referenced correctly (GDPR/CCPA/30 days)
+      0.12 — third-party notification mentioned
+      0.10 — audit trail/deletion reference provided
+      0.10 — data retention explained transparently
+      0.08 — escalation to compliance when needed
+      0.08 — professional/compliant tone
+      0.10 — sequencing correct
+    """
+    if not history:
+        return 0.0, {k: False for k in [
+            "verification_requested", "exemptions_checked", "regulation_referenced",
+            "thirdparty_notified", "audit_trail_provided", "retention_explained",
+            "escalated_if_needed", "professional_tone", "sequencing_correct",
+        ]}
+
+    score = 0.0
+    hints: Dict[str, bool] = {}
+    texts = _action_texts(history)
+
+    has_exemption = (
+        ticket.metadata.get("subscription_active") or
+        ticket.metadata.get("pending_transactions", 0) > 0 or
+        ticket.metadata.get("legal_hold")
+    )
+    regulation = ticket.metadata.get("regulation", "GDPR")
+
+    hints["verification_requested"] = _kw(texts, [
+        "verify", "verification", "id", "identity", "driver's license", "passport", "last 4 digits"
+    ]) >= 1
+    if hints["verification_requested"]:
+        score += 0.15
+
+    exemption_keywords = ["active subscription", "pending", "legal hold", "cancel", "exempt", "cannot delete"]
+    hints["exemptions_checked"] = has_exemption == (_kw(texts, exemption_keywords) >= 1)
+    if hints["exemptions_checked"]:
+        score += 0.15
+
+    hints["regulation_referenced"] = _kw(texts, [
+        regulation, "gdpr", "ccpa", "30 days", "30 day", "article 17", "right to be forgotten"
+    ]) >= 1
+    if hints["regulation_referenced"]:
+        score += 0.12
+
+    hints["thirdparty_notified"] = _kw(texts, [
+        "stripe", "salesforce", "integrations", "third party", "notify", "partners"
+    ]) >= 1
+    if hints["thirdparty_notified"]:
+        score += 0.12
+
+    hints["audit_trail_provided"] = _kw(texts, [
+        "reference", "del-", "audit", "logged", "confirmation", "tracking"
+    ]) >= 1
+    if hints["audit_trail_provided"]:
+        score += 0.10
+
+    hints["retention_explained"] = _kw(texts, [
+        "90 days", "backup", "retained", "legally required", "metadata"
+    ]) >= 1
+    if hints["retention_explained"]:
+        score += 0.10
+
+    hints["escalated_if_needed"] = (
+        not has_exemption or
+        _agent_did(history, ActionType.ESCALATE) or
+        _kw(texts, ["compliance team", "legal team", "escalate", "specialist"]) >= 1
+    )
+    if hints["escalated_if_needed"]:
+        score += 0.08
+
+    hints["professional_tone"] = _kw(texts, [
+        "thank you", "request received", "process", "confirm", "acknowledge"
+    ]) >= 1
+    if hints["professional_tone"]:
+        score += 0.08
+
+    hints["sequencing_correct"] = _resolved_after_reply(history)
+    if hints["sequencing_correct"]:
+        score += 0.10
+    else:
+        score -= 0.10
+
+    return round(min(max(score, 0.0), 1.0), 4), hints
+
+
+def _build_instructions_8(ticket: Ticket) -> str:
+    meta = ticket.metadata
+    region = meta.get("region", "EU")
+    regulation = meta.get("regulation", "GDPR")
+    sub_active = meta.get("subscription_active", False)
+    pending = meta.get("pending_transactions", 0)
+    legal_hold = meta.get("legal_hold", False)
+
+    exemptions = []
+    if sub_active:
+        exemptions.append(f"active {meta.get('subscription_tier')} subscription")
+    if pending > 0:
+        exemptions.append(f"{pending} pending transaction(s)")
+    if legal_hold:
+        exemptions.append("legal hold")
+
+    exempt_text = f"\nCRITICAL: Account has exemptions: {', '.join(exemptions)}. Cannot delete immediately." if exemptions else ""
+
+    return (
+        f"Customer requests data deletion under {region} ({regulation}).\n"
+        f"User ID: {meta.get('user_id')}. Reason: {meta.get('deletion_reason', 'unspecified')}.\n"
+        f"Data volume: {meta.get('data_volume_gb')} GB across multiple integrations.{exempt_text}\n"
+        "Objectives:\n"
+        "1. Request identity verification (ID or payment card + creation date).\n"
+        "2. Check for exemptions: active subscription, pending transactions, legal holds.\n"
+        "3. Reference the correct regulation and 30-day response requirement.\n"
+        "4. Mention third-party integration notifications (Stripe, Salesforce).\n"
+        "5. Provide deletion reference number (DEL-XXXX) for audit trail.\n"
+        "6. Explain 90-day backup retention policy transparently.\n"
+        "7. Escalate to compliance team if exemptions exist.\n"
+        "8. Maintain professional, legally-compliant tone throughout.\n"
+        "This is a legal/compliance task — accuracy is critical."
+    )
+
+
+TASK_8 = {
+    "name": "compliance-deletion-expert",
+    "difficulty": "expert",
+    "build_ticket": _build_ticket_8,
+    "ticket": _build_ticket_8(),
+    "instructions": _build_instructions_8,
+    "kb_snippets": _KB_8,
+    "available_templates": _TEMPLATES_8,
+    "followup_responses": _FOLLOWUPS_8,
+    "tool_responses": _tool_responses_8,
+    "max_steps": 12,
+    "ideal_steps": 6,
+    "grader": _grader_8,
+}
+
+
+# =============================================================================
 # Task registry
 # =============================================================================
 
 TASKS: Dict[str, Dict] = {
-    "password-reset-easy":        TASK_1,
-    "billing-dispute-medium":     TASK_2,
-    "enterprise-escalation-hard": TASK_3,
-    "security-incident-expert":   TASK_4,
-    "shipping-dispute-expert":    TASK_5,
+    "password-reset-easy":           TASK_1,
+    "billing-dispute-medium":        TASK_2,
+    "enterprise-escalation-hard":    TASK_3,
+    "security-incident-expert":      TASK_4,
+    "shipping-dispute-expert":       TASK_5,
+    "technical-integration-hard":    TASK_6,
+    "subscription-retention-medium": TASK_7,
+    "compliance-deletion-expert":    TASK_8,
 }

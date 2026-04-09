@@ -146,7 +146,7 @@ class SupportObservation(BaseModel):
 
 class StepResult(BaseModel):
     observation: SupportObservation
-    reward: float = Field(..., ge=0.0, le=1.0)
+    reward: float = Field(..., ge=-1.0, le=1.0)
     done: bool
     info: Dict[str, Any] = Field(default_factory=dict)
 

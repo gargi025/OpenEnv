@@ -39,6 +39,16 @@ tasks:
       categorize correctly, reference both order IDs, initiate a refund,
       offer goodwill compensation, and resolve.
 
+  - name: subscription-retention-medium
+    difficulty: medium
+    max_steps: 10
+    ideal_steps: 6
+    description: >
+      Prevent customer churn when a subscriber wants to cancel. Agent must explore
+      exit reasons, provide value recap, offer alternatives (pause/downgrade),
+      make win-back offers, and address competitor mentions. Tests consultative
+      retention skills.
+
   - name: enterprise-escalation-hard
     difficulty: hard
     max_steps: 10
@@ -48,6 +58,16 @@ tasks:
       billing overage, and data loss while threatening contract cancellation.
       Requires multi-issue triage, SLA-aware escalation, churn prevention,
       and executive sync coordination.
+
+  - name: technical-integration-hard
+    difficulty: hard
+    max_steps: 10
+    ideal_steps: 5
+    description: >
+      Debug a webhook/API integration failure. Agent must diagnose HTTP 410 Gone
+      errors, identify v1 deprecation, offer v2 migration path, reference incident
+      IDs, and provide technical workarounds. Tests developer empathy and
+      technical troubleshooting skills.
 
   - name: security-incident-expert
     difficulty: expert
@@ -67,6 +87,16 @@ tasks:
       Resolve a missing-package dispute for a loyal 3-year customer with a
       low fraud score. Agent must acknowledge loyalty, apply the loyalty policy
       (immediate reship/refund), avoid excessive verification, and offer goodwill.
+
+  - name: compliance-deletion-expert
+    difficulty: expert
+    max_steps: 12
+    ideal_steps: 6
+    description: >
+      Process a GDPR/CCPA data deletion request. Agent must verify identity,
+      check exemptions (active subscriptions, pending transactions, legal holds),
+      reference regulations correctly, notify third-party integrations, and
+      provide audit trail references. Tests legal compliance accuracy.
 
 observation_space:
   type: structured

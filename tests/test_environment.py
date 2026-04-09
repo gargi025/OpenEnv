@@ -45,11 +45,12 @@ def shipping_env():
 # Task registry
 # ===========================================================================
 
-def test_five_tasks_registered():
+def test_eight_tasks_registered():
     assert set(TASKS.keys()) == {
         "password-reset-easy", "billing-dispute-medium",
         "enterprise-escalation-hard", "security-incident-expert",
-        "shipping-dispute-expert",
+        "shipping-dispute-expert", "technical-integration-hard",
+        "compliance-deletion-expert", "subscription-retention-medium",
     }
 
 def test_required_fields_present():
@@ -268,7 +269,7 @@ def test_all_step_rewards_in_range(easy_env):
     ]
     for a in actions:
         r = easy_env.step(a)
-        assert 0.0 <= r.reward <= 1.0, f"Reward out of range: {r.reward}"
+        assert -1.0 <= r.reward <= 1.0, f"Reward out of range: {r.reward}"
         if r.done:
             break
 
