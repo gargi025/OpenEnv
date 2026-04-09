@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .models import (
     ActionType, CustomerMessage, CustomerSentiment,
-    ResetResult, StateResult, StepResult,
+    ResetResult, StateResult, StepResult, ToolResult,
     SupportAction, SupportObservation, Ticket, TicketStatus,
 )
 from .tasks import TASKS
@@ -27,6 +27,14 @@ _SENTIMENT_SCALE = [
     CustomerSentiment.DELIGHTED,
 ]
 
+# Action types that are tool calls — they cost a step but don't communicate with customer
+_TOOL_ACTION_TYPES = {
+    ActionType.LOOKUP_ORDER,
+    ActionType.CHECK_POLICY,
+    ActionType.TRIGGER_REFUND,
+    ActionType.FLAG_FRAUD,
+}
+
 
 def _shift_sentiment(current: CustomerSentiment, delta: int) -> CustomerSentiment:
     idx = _SENTIMENT_SCALE.index(current)
@@ -38,21 +46,26 @@ class SupportEnvironment:
     One episode of the Customer Support Ticket Resolution environment.
 
     Implements the OpenEnv interface: reset() / step() / state()
+
+    On each reset(), a fresh ticket is built via the task's build_ticket()
+    function, randomizing amounts, names, and IDs for score variance.
     """
 
     # ---- Dense reward weights ----
     _R_REPLY_BASE       = 0.08
-    _R_REPLY_LENGTH     = 0.04   # bonus for substantive replies (>100 chars)
+    _R_REPLY_LENGTH     = 0.04   # bonus for substantive replies (>= 100 chars)
     _R_CATEGORIZE_OK    = 0.10
     _R_PRIORITY         = 0.07
     _R_TEMPLATE         = 0.05
     _R_ESCALATE         = 0.05
     _R_NOTE             = 0.03
     _R_COMPENSATION     = 0.07
-    _R_SENTIMENT_UP     = 0.04   # each time sentiment improves one level
+    _R_TOOL_USE         = 0.04   # reward for using a tool (agentic behavior)
+    _R_SENTIMENT_UP     = 0.04
     _P_WRONG_CATEGORY   = -0.08
     _P_REDUNDANT        = -0.04
     _P_SHORT_REPLY      = -0.02
+    _P_TOOL_REDUNDANT   = -0.03  # calling the same tool twice
 
     def __init__(self, task_name: str) -> None:
         if task_name not in TASKS:
@@ -69,13 +82,36 @@ class SupportEnvironment:
         self._first_reply_done = False
         self._progress_hints: Dict[str, bool] = {}
         self._sla_status = "ok"
+        self._last_tool_result: Optional[ToolResult] = None
+        self._tool_responses: Dict[ActionType, Callable] = {}
+        self._instructions: str = ""
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def reset(self) -> ResetResult:
-        self._ticket = copy.deepcopy(self._task["ticket"])
+        # Build a fresh randomized ticket on every reset
+        build_fn = self._task.get("build_ticket")
+        if build_fn:
+            self._ticket = build_fn()
+        else:
+            self._ticket = copy.deepcopy(self._task["ticket"])
+
+        # Resolve instructions — may be a callable that takes the live ticket
+        instructions = self._task["instructions"]
+        if callable(instructions):
+            self._instructions = instructions(self._ticket)
+        else:
+            self._instructions = instructions
+
+        # Resolve tool_responses — may be a callable that takes the live ticket
+        tool_responses = self._task.get("tool_responses", {})
+        if callable(tool_responses):
+            self._tool_responses = tool_responses(self._ticket)
+        else:
+            self._tool_responses = tool_responses
+
         self._step = 0
         self._done = False
         self._history = []
@@ -85,6 +121,8 @@ class SupportEnvironment:
         self._first_reply_done = False
         self._progress_hints = {}
         self._sla_status = "ok"
+        self._last_tool_result = None
+
         return ResetResult(
             observation=self._build_obs(feedback=None, followup=None),
             info={"task": self.task_name, "max_steps": self._task["max_steps"]},
@@ -102,17 +140,50 @@ class SupportEnvironment:
         self._update_sla()
         sla_penalty = self._maybe_apply_sla_breach()
 
+        # Handle tool-use actions separately
+        if action.action_type in _TOOL_ACTION_TYPES:
+            reward, feedback, tool_result = self._execute_tool(action)
+            self._last_tool_result = tool_result
+            reward += sla_penalty
+            self._history.append({
+                "step": self._step,
+                "action": action,
+                "reward": reward,
+                "tool_result": tool_result,
+            })
+            self._cumulative_reward = round(self._cumulative_reward + reward, 4)
+            self._action_counts[action.action_type] = self._action_counts.get(action.action_type, 0) + 1
+            _, self._progress_hints = self._task["grader"](self._history, self._ticket)
+
+            return StepResult(
+                observation=self._build_obs(feedback, None),
+                reward=min(max(round(reward, 4), 0.0), 1.0),
+                done=False,
+                info={
+                    "step": self._step,
+                    "cumulative_reward": self._cumulative_reward,
+                    "tool_used": action.action_type.value,
+                    "tool_success": tool_result.success if tool_result else False,
+                },
+            )
+
         reward, feedback = self._compute_reward(action)
         reward += sla_penalty
 
         followup = self._apply_action(action)
 
-        self._history.append({"step": self._step, "action": action, "reward": reward})
+        self._history.append({
+            "step": self._step,
+            "action": action,
+            "reward": reward,
+            "tool_result": None,
+        })
         self._cumulative_reward = round(self._cumulative_reward + reward, 4)
         self._action_counts[action.action_type] = self._action_counts.get(action.action_type, 0) + 1
+        self._last_tool_result = None  # clear after non-tool action
 
         terminal = action.action_type in {ActionType.RESOLVE, ActionType.ESCALATE}
-        max_hit = self._step >= self._task["max_steps"]
+        max_hit = self._step >= (self._task["max_steps"] - 1)
 
         if terminal or max_hit:
             self._done = True
@@ -157,6 +228,45 @@ class SupportEnvironment:
         )
 
     # ------------------------------------------------------------------
+    # Tool execution
+    # ------------------------------------------------------------------
+
+    def _execute_tool(self, action: SupportAction) -> Tuple[float, str, Optional[ToolResult]]:
+        """Execute a tool-use action. Returns (reward, feedback, tool_result)."""
+        at = action.action_type
+        prev = self._action_counts.get(at, 0)
+
+        # Penalize calling the same tool twice
+        if prev >= 1:
+            result = ToolResult(
+                action_type=at.value,
+                success=False,
+                error=f"Tool '{at.value}' already used this episode. Use results from the first call.",
+            )
+            return self._P_TOOL_REDUNDANT, f"Redundant tool call: {at.value}.", result
+
+        handler = self._tool_responses.get(at)
+        if handler:
+            result = handler(self._ticket)
+        else:
+            result = ToolResult(
+                action_type=at.value,
+                success=False,
+                error=f"Tool '{at.value}' not available for this task.",
+            )
+
+        if result.success:
+            reward = self._R_TOOL_USE
+            feedback = f"Tool '{at.value}' succeeded."
+            if result.confirmation_id:
+                feedback += f" Confirmation: {result.confirmation_id}."
+        else:
+            reward = 0.0
+            feedback = f"Tool '{at.value}' failed: {result.error}"
+
+        return reward, feedback, result
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
@@ -166,15 +276,16 @@ class SupportEnvironment:
             ticket=copy.deepcopy(self._ticket),
             step_number=self._step,
             max_steps=max_s,
-            steps_remaining=max(0, max_s - self._step),
+            steps_remaining=max(0, max_s - self._step - 1),
             available_templates=self._task.get("available_templates", []),
             kb_snippets=self._task.get("kb_snippets", []),
             last_action_feedback=feedback,
-            task_instructions=self._task["instructions"],
+            task_instructions=self._instructions,
             sla_status=self._sla_status,
             customer_sentiment=self._ticket.sentiment,
             customer_followup=followup,
             progress_hints=copy.copy(self._progress_hints),
+            tool_result=copy.deepcopy(self._last_tool_result),
         )
 
     def _update_sla(self) -> None:
@@ -200,7 +311,6 @@ class SupportEnvironment:
         at = action.action_type
         prev = self._action_counts.get(at, 0)
 
-        # Redundancy
         if prev >= 2 and at not in {ActionType.REPLY, ActionType.REQUEST_INFO, ActionType.ADD_NOTE}:
             r += self._P_REDUNDANT
             msgs.append(f"Redundant {at} (×{prev}).")
@@ -262,7 +372,6 @@ class SupportEnvironment:
         at = action.action_type
         followups = self._task.get("followup_responses", {})
         followup: Optional[str] = None
-        prev_sentiment = self._ticket.sentiment
 
         if at in {ActionType.REPLY, ActionType.REQUEST_INFO, ActionType.APPLY_TEMPLATE}:
             text = action.reply_text or f"[Template applied: {action.template_id}]"
@@ -274,7 +383,6 @@ class SupportEnvironment:
             if at == ActionType.REQUEST_INFO:
                 self._ticket.status = TicketStatus.WAITING_CUSTOMER
 
-            # Simulate customer reply
             resp = followups.get(at)
             if resp:
                 self._ticket.conversation.append(
@@ -311,7 +419,6 @@ class SupportEnvironment:
             )
             self._ticket.metadata["compensation_offered"] = action.compensation_amount
             followup = followups.get(ActionType.OFFER_COMPENSATION)
-            # Compensation jumps sentiment by 2
             self._ticket.sentiment = _shift_sentiment(self._ticket.sentiment, +2)
 
         if action.tags:

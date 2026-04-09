@@ -42,15 +42,24 @@ class CustomerSentiment(str, Enum):
 
 
 class ActionType(str, Enum):
+    # --- Communication actions ---
     REPLY = "reply"
+    REQUEST_INFO = "request_info"
+    APPLY_TEMPLATE = "apply_template"
+    ADD_NOTE = "add_note"
+    # --- Ticket management actions ---
     CATEGORIZE = "categorize"
     SET_PRIORITY = "set_priority"
     ESCALATE = "escalate"
     RESOLVE = "resolve"
-    REQUEST_INFO = "request_info"
-    APPLY_TEMPLATE = "apply_template"
-    ADD_NOTE = "add_note"
     OFFER_COMPENSATION = "offer_compensation"
+    # --- Tool-use actions (agentic) ---
+    # Agent explicitly calls these to retrieve structured data.
+    # Each costs one step and returns data in the next observation's tool_result field.
+    LOOKUP_ORDER = "lookup_order"        # args: order_id — returns order status/metadata
+    CHECK_POLICY = "check_policy"        # args: policy_topic — returns policy text
+    TRIGGER_REFUND = "trigger_refund"    # args: order_id, amount — returns confirmation ID
+    FLAG_FRAUD = "flag_fraud"            # args: reason — returns case number
 
 
 class SLAConfig(BaseModel):
@@ -88,15 +97,31 @@ class Ticket(BaseModel):
 class SupportAction(BaseModel):
     """One action emitted by the agent per step."""
     action_type: ActionType
+    # Communication
     reply_text: Optional[str] = None
+    note_text: Optional[str] = None
+    template_id: Optional[str] = None
+    # Ticket management
     category: Optional[TicketCategory] = None
     priority: Optional[TicketPriority] = None
-    template_id: Optional[str] = None
     escalation_reason: Optional[str] = None
     resolution_summary: Optional[str] = None
-    note_text: Optional[str] = None
     compensation_amount: Optional[float] = None
     tags: Optional[List[str]] = None
+    # Tool-use args
+    order_id: Optional[str] = None          # for LOOKUP_ORDER, TRIGGER_REFUND
+    policy_topic: Optional[str] = None      # for CHECK_POLICY
+    amount: Optional[float] = None          # for TRIGGER_REFUND
+    reason: Optional[str] = None            # for FLAG_FRAUD
+
+
+class ToolResult(BaseModel):
+    """Structured result returned after a tool-use action."""
+    action_type: str
+    success: bool
+    data: Dict[str, Any] = Field(default_factory=dict)
+    confirmation_id: Optional[str] = None   # REF-XXXX for refunds, SEC-XXXX for fraud flags
+    error: Optional[str] = None
 
 
 class SupportObservation(BaseModel):
@@ -115,6 +140,8 @@ class SupportObservation(BaseModel):
     customer_followup: Optional[str] = None
     # Live checklist of grader sub-objectives — gives the agent a learning signal
     progress_hints: Dict[str, bool] = Field(default_factory=dict)
+    # Tool result from previous step (None if last action was not a tool call)
+    tool_result: Optional[ToolResult] = None
 
 
 class StepResult(BaseModel):
