@@ -1,12 +1,31 @@
 """
 inference.py — Baseline inference script for Customer Support Ticket Resolution OpenEnv.
 
+Requirements:
+  pip install openai httpx
+
 Environment variables:
   API_BASE_URL    LLM endpoint  (default: https://router.huggingface.co/v1)
   MODEL_NAME      Model ID      (default: Qwen/Qwen2.5-72B-Instruct)
-  HF_TOKEN        API key
-  SUPPORT_ENV_URL Environment base URL (default: https://Gargi025-openenv.hf.space)
-  TASK_NAME       Run one task only (default: all 5 tasks)
+  HF_TOKEN        API key (also accepts API_KEY)
+  SUPPORT_ENV_URL Environment base URL (default: http://localhost:7860)
+  TASK_NAME       Run one task only (default: all tasks)
+                    Options: password-reset-easy, billing-dispute-medium,
+                    subscription-retention-medium, enterprise-escalation-hard,
+                    technical-integration-hard, security-incident-expert,
+                    shipping-dispute-expert, compliance-deletion-expert
+
+Usage:
+  # Run all tasks against local server
+  python inference.py
+
+  # Run single task
+  export TASK_NAME=password-reset-easy
+  python inference.py
+
+  # Run against HF Space
+  export SUPPORT_ENV_URL=https://your-space.hf.space
+  python inference.py
 
 STDOUT (OpenEnv spec — do not modify format):
   [START] task=<name> env=customer-support model=<model>
@@ -42,16 +61,19 @@ signal.alarm(18 * 60)  # 18 min hard cap
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "dummy")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-ENV_URL      = os.getenv("SUPPORT_ENV_URL", "https://Gargi025-openenv.hf.space").rstrip("/")
+ENV_URL      = os.getenv("SUPPORT_ENV_URL", "http://localhost:7860").rstrip("/")
 BENCHMARK    = "customer-support"
 SUCCESS_THRESHOLD = 0.30
 
 ALL_TASKS = [
     "password-reset-easy",
     "billing-dispute-medium",
+    "subscription-retention-medium",
     "enterprise-escalation-hard",
+    "technical-integration-hard",
     "security-incident-expert",
     "shipping-dispute-expert",
+    "compliance-deletion-expert",
 ]
 TASK_OVERRIDE = os.getenv("TASK_NAME", "")
 

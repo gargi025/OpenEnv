@@ -1,5 +1,5 @@
 """
-tasks.py — Five tasks for the Customer Support environment.
+tasks.py — Eight tasks for the Customer Support environment.
 
 GRADER DESIGN PRINCIPLES (critical for judging):
   1. Graders score AGENT ACTIONS in the history, never the initial ticket state.
@@ -495,15 +495,18 @@ def _grader_2(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["categorized_correctly"]:
         score += 0.15
 
-    # Check against live ticket order IDs (randomized)
+    # Check against live ticket order IDs (randomized) — STRICT: must reference BOTH in replies
     orders = ticket.metadata.get("orders", [])
     ord_ids = [o["id"] for o in orders]
-    ord_hits = _kw(texts, ord_ids)
+    # Only check reply_text for order IDs (not notes) — must be communicated to customer
+    reply_texts = [h["action"].reply_text for h in history if h["action"].reply_text]
+    combined_replies = " ".join(reply_texts).lower()
+    ord_hits = sum(1 for oid in ord_ids if oid.lower() in combined_replies)
     hints["order_ids_referenced"] = ord_hits >= 2
     if hints["order_ids_referenced"]:
-        score += 0.15
-    elif ord_hits == 1:
-        score += 0.06
+        score += 0.18
+    else:
+        score -= 0.05  # Penalty for not referencing BOTH order IDs
 
     hints["ticket_closed"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
     if hints["ticket_closed"]:
@@ -625,6 +628,15 @@ _TOOL_RESPONSES_3 = {
             "billing_overage": ticket.metadata.get("billing_overage", {}),
             "sla_tier": "platinum",
             "churn_risk": ticket.metadata.get("churn_risk", "critical"),
+        },
+    ),
+    ActionType.SCHEDULE_CALLBACK: lambda ticket: ToolResult(
+        action_type="schedule_callback",
+        success=True,
+        confirmation_id=f"SYNC-{random.randint(1000, 9999)}",
+        data={
+            "scheduled_time": "2026-04-11T14:00:00Z",
+            "participant": "VP of Engineering",
         },
     ),
 }
@@ -751,6 +763,10 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     else:
         score -= 0.10
 
+    hints["sync_scheduled"] = _tool_was_used(history, ActionType.SCHEDULE_CALLBACK)
+    if hints["sync_scheduled"]:
+        score += 0.08
+
     hints["ticket_closed"] = _agent_did(history, ActionType.RESOLVE) or _agent_did(history, ActionType.ESCALATE)
     if hints["ticket_closed"]:
         score += 0.05
@@ -774,7 +790,7 @@ def _build_instructions_3(ticket: Ticket) -> str:
         "4. Use CHECK_POLICY to retrieve SLA + compensation policy before replying.\n"
         "5. Reference SLA commitments and compensation policy (10% credit per breach).\n"
         "6. Loop in CSM and VP of Sales for churn risk.\n"
-        "7. Offer an executive sync call with engineering leadership.\n"
+        "7. Offer an executive sync call with engineering leadership (use SCHEDULE_CALLBACK).\n"
         "Warning: SLA breach penalty is heavy (0.20). First action must be ESCALATE."
     )
 
@@ -1088,8 +1104,20 @@ def _tool_responses_5(ticket: Ticket):
                     f"Customer fraud_score={fraud_score} (low risk). "
                     f"Loyalty policy applies: {total_orders} orders, 0 prior refunds. "
                     f"Immediate reship or refund approved for orders <= $300. "
-                    f"Use TRIGGER_REFUND tool and share REF-XXXX confirmation."
+                    f"Use TRIGGER_REFUND or SEND_REPLACEMENT tool and share confirmation ID."
                 ),
+            },
+        ),
+        ActionType.SEND_REPLACEMENT: lambda t: ToolResult(
+            action_type="send_replacement",
+            success=True,
+            confirmation_id=f"RESHIP-{random.randint(10000, 99999)}",
+            data={
+                "order_id": order_id,
+                "carrier": "FedEx",
+                "service": "Express",
+                "eta_days": 3,
+                "tracking": f"FX-{random.randint(1000000, 9999999)}-REP",
             },
         ),
     }
@@ -1190,7 +1218,7 @@ def _grader_5(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     elif hits == 1:
         score += 0.05
 
-    hints["refund_triggered"] = _tool_was_used(history, ActionType.TRIGGER_REFUND)
+    hints["refund_triggered"] = _tool_was_used(history, ActionType.TRIGGER_REFUND) or _tool_was_used(history, ActionType.SEND_REPLACEMENT)
     if hints["refund_triggered"]:
         score += 0.15
 
@@ -1638,6 +1666,10 @@ def _grader_7(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["metadata_set"]:
         score += 0.08
 
+    hints["callback_scheduled"] = _tool_was_used(history, ActionType.SCHEDULE_CALLBACK)
+    if hints["callback_scheduled"]:
+        score += 0.10
+
     return round(min(max(score, 0.0), 1.0), 4), hints
 
 
@@ -1669,11 +1701,25 @@ def _build_instructions_7(ticket: Ticket) -> str:
         "3. Offer alternatives to cancellation (pause, downgrade, switch to annual).\n"
         "4. Make a win-back offer (discount, dedicated CSM, feature unlock).\n"
         "5. If competitor mentioned, highlight differentiating features.\n"
-        "6. Maintain empathetic, non-pushy tone throughout.\n"
-        "7. Find resolution: save, pause, or gracefully close.\n"
+        "6. If offering a CSM, optionally use SCHEDULE_CALLBACK to set up a meeting.\n"
+        "7. Maintain empathetic, non-pushy tone throughout.\n"
+        "8. Find resolution: save, pause, or gracefully close.\n"
         "Goal: Retain the customer through consultative support, not pressure."
     )
 
+
+def _tool_responses_7(ticket: Ticket):
+    return {
+        ActionType.SCHEDULE_CALLBACK: lambda t: ToolResult(
+            action_type="schedule_callback",
+            success=True,
+            confirmation_id=f"CB-{random.randint(10000, 99999)}",
+            data={
+                "scheduled_time": "2026-04-15T15:00:00Z",
+                "participant": "Dedicated CSM",
+            },
+        ),
+    }
 
 TASK_7 = {
     "name": "subscription-retention-medium",
@@ -1684,7 +1730,7 @@ TASK_7 = {
     "kb_snippets": _KB_7,
     "available_templates": _TEMPLATES_7,
     "followup_responses": _FOLLOWUPS_7,
-    "tool_responses": {},
+    "tool_responses": _tool_responses_7,
     "max_steps": 10,
     "ideal_steps": 6,
     "grader": _grader_7,

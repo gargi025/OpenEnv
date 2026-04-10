@@ -33,6 +33,8 @@ _TOOL_ACTION_TYPES = {
     ActionType.CHECK_POLICY,
     ActionType.TRIGGER_REFUND,
     ActionType.FLAG_FRAUD,
+    ActionType.SEND_REPLACEMENT,
+    ActionType.SCHEDULE_CALLBACK,
 }
 
 

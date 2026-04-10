@@ -60,6 +60,8 @@ class ActionType(str, Enum):
     CHECK_POLICY = "check_policy"        # args: policy_topic — returns policy text
     TRIGGER_REFUND = "trigger_refund"    # args: order_id, amount — returns confirmation ID
     FLAG_FRAUD = "flag_fraud"            # args: reason — returns case number
+    SEND_REPLACEMENT = "send_replacement"  # args: order_id — returns tracking number
+    SCHEDULE_CALLBACK = "schedule_callback"  # args: datetime, phone — returns confirmation
 
 
 class SLAConfig(BaseModel):
@@ -109,10 +111,12 @@ class SupportAction(BaseModel):
     compensation_amount: Optional[float] = None
     tags: Optional[List[str]] = None
     # Tool-use args
-    order_id: Optional[str] = None          # for LOOKUP_ORDER, TRIGGER_REFUND
+    order_id: Optional[str] = None          # for LOOKUP_ORDER, TRIGGER_REFUND, SEND_REPLACEMENT
     policy_topic: Optional[str] = None      # for CHECK_POLICY
     amount: Optional[float] = None          # for TRIGGER_REFUND
     reason: Optional[str] = None            # for FLAG_FRAUD
+    phone: Optional[str] = None             # for SCHEDULE_CALLBACK
+    scheduled_time: Optional[str] = None    # for SCHEDULE_CALLBACK (ISO datetime)
 
 
 class ToolResult(BaseModel):

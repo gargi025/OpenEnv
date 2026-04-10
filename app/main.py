@@ -8,12 +8,14 @@ POST /step        send one action, receive observation + reward
 GET  /state       inspect current state (no side effects)
 GET  /tasks       list all tasks with metadata
 GET  /health      liveness probe
+GET  /metrics     per-task success rates and statistics
 POST /reset_all   clear all sessions (for batch eval)
 """
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +27,9 @@ from .tasks import TASKS
 
 _sessions: Dict[str, SupportEnvironment] = {}
 _DEFAULT_TASK = "password-reset-easy"
+
+# Episode metrics storage for observability
+_episode_metrics: List[Dict] = []
 
 
 class ResetRequest(BaseModel):
@@ -67,12 +72,7 @@ def root():
         "endpoints": ["/reset", "/step", "/state"]
     }
 
-@app.get("/")
-def root():
-    return {
-        "message": "Customer Support Environment API",
-        "endpoints": ["/reset", "/step", "/state"]
-    }
+
 @app.get("/health")
 async def health():
     return {
@@ -104,6 +104,49 @@ async def list_tasks():
     }
 
 
+@app.get("/metrics")
+async def get_metrics():
+    """Per-task success rates and performance statistics."""
+    if not _episode_metrics:
+        return {
+            "total_episodes": 0,
+            "by_task": {},
+            "overall": {
+                "success_rate": 0.0,
+                "avg_steps": 0.0,
+                "avg_reward": 0.0,
+            },
+        }
+
+    by_task = {}
+    for task_name in TASKS:
+        task_episodes = [m for m in _episode_metrics if m["task_name"] == task_name]
+        if task_episodes:
+            successes = sum(1 for m in task_episodes if m["success"])
+            by_task[task_name] = {
+                "total_episodes": len(task_episodes),
+                "successes": successes,
+                "success_rate": round(successes / len(task_episodes), 4),
+                "avg_steps": round(sum(m["steps"] for m in task_episodes) / len(task_episodes), 2),
+                "avg_reward": round(sum(m["cumulative_reward"] for m in task_episodes) / len(task_episodes), 4),
+                "sla_breach_rate": round(sum(1 for m in task_episodes if m["sla_breached"]) / len(task_episodes), 4),
+            }
+
+    total_episodes = len(_episode_metrics)
+    overall_successes = sum(1 for m in _episode_metrics if m["success"])
+
+    return {
+        "total_episodes": total_episodes,
+        "by_task": by_task,
+        "overall": {
+            "success_rate": round(overall_successes / total_episodes, 4),
+            "avg_steps": round(sum(m["steps"] for m in _episode_metrics) / total_episodes, 2),
+            "avg_reward": round(sum(m["cumulative_reward"] for m in _episode_metrics) / total_episodes, 4),
+            "sla_breach_rate": round(sum(1 for m in _episode_metrics if m["sla_breached"]) / total_episodes, 4),
+        },
+    }
+
+
 @app.post("/reset", response_model=ResetResult)
 async def reset(req: ResetRequest = None):
     if req is None:
@@ -125,7 +168,21 @@ async def step(req: StepRequest):
     env = _sessions.get(sid)
     if env is None:
         raise HTTPException(400, detail=f"No session '{sid}'. Call /reset first.")
-    return env.step(req.action)
+    result = env.step(req.action)
+
+    # Track completed episodes for metrics
+    if result.done and env.state().step_number > 0:
+        _episode_metrics.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_name": env.task_name,
+            "steps": env.state().step_number,
+            "cumulative_reward": env.state().cumulative_reward,
+            "success": env.state().cumulative_reward >= 0.50,  # Success threshold
+            "sla_breached": result.observation.sla_status == "breached",
+            "final_sentiment": result.observation.customer_sentiment,
+        })
+
+    return result
 
 
 @app.get("/state", response_model=StateResult)
@@ -137,10 +194,14 @@ async def state(session_id: str = Query(default="default")):
 
 
 @app.post("/reset_all")
-async def reset_all():
+async def reset_all(clear_metrics: bool = False):
     cleared = list(_sessions.keys())
     _sessions.clear()
     env = SupportEnvironment(_DEFAULT_TASK)
     env.reset()
     _sessions["default"] = env
-    return {"cleared": cleared, "status": "ok"}
+
+    if clear_metrics:
+        _episode_metrics.clear()
+
+    return {"cleared": cleared, "status": "ok", "metrics_cleared": clear_metrics}
