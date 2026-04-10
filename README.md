@@ -1,6 +1,15 @@
+
+---
+title: OpenEnv Customer Support RL
+emoji: 🤖
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
 # Customer Support Ticket Resolution
 
-An [OpenEnv](https://github.com/openai/openenv) environment simulating real-world customer support ticket resolution. AI agents act as support specialists handling tickets across 8 tasks at 4 difficulty levels, featuring dense rewards, SLA pressure, dynamic customer sentiment, simulated multi-turn conversations, and trajectory-aware graders.
+An [OpenEnv] environment simulating real-world customer support ticket resolution. AI agents act as support specialists handling tickets across 8 tasks at 4 difficulty levels, featuring dense rewards, SLA pressure, dynamic customer sentiment, simulated multi-turn conversations, and trajectory-aware graders.
 
 ---
 
