@@ -83,17 +83,19 @@ def test_templates_nonempty():
 # CRITICAL: Grader invariants — judges will check these
 # ===========================================================================
 
-def test_all_graders_score_zero_on_empty_history():
-    """Graders must return 0.0 when no actions have been taken."""
+def test_all_graders_score_near_zero_on_empty_history():
+    """Graders must return a score strictly in (0, 1) — evaluator rejects 0.0 and 1.0.
+    On empty history the score must be effectively zero (< 0.01) but not exactly 0.0."""
     for name, task in TASKS.items():
         score, hints = task["grader"]([], task["ticket"])
-        assert score == 0.0, f"Task '{name}' scored {score} on empty history — grader is broken"
+        assert score < 0.01, f"Task '{name}' scored {score} on empty history — grader is broken"
+        assert score > 0.0, f"Task '{name}' returned exactly 0.0 — evaluator requires strictly > 0"
 
 def test_all_graders_return_float_in_range():
     for name, task in TASKS.items():
         score, hints = task["grader"]([], task["ticket"])
         assert isinstance(score, float)
-        assert 0.0 <= score <= 1.0
+        assert 0.0 < score < 1.0, f"Task '{name}' score {score} must be strictly between 0 and 1"
 
 def test_all_graders_return_dict_hints():
     for name, task in TASKS.items():
