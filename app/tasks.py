@@ -35,7 +35,8 @@ from .models import (
     SLAConfig, SupportAction, Ticket, ToolResult,
     TicketCategory, TicketPriority, TicketStatus,
 )
-
+def normalize_score(score: float) -> float:
+    return max(1e-6, min(0.999999, score))
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -274,7 +275,7 @@ def _grader_1(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.12 — efficiency bonus (ideal <= 3 steps)
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "categorized_as_account", "priority_set", "reply_addressed_reset",
             "ticket_closed", "sequencing_correct", "policy_checked", "tool_result_used",
             "efficient_resolution",
@@ -322,7 +323,7 @@ def _grader_1(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     score += eff
     hints["efficient_resolution"] = eff >= 0.08
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 TASK_1 = {
@@ -477,7 +478,7 @@ def _grader_2(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.06 — sequencing: reply before resolve
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "empathy_shown", "categorized_correctly", "order_ids_referenced",
             "ticket_closed", "refund_triggered", "confirmation_referenced",
             "priority_set", "compensation_offered", "sequencing_correct",
@@ -534,7 +535,7 @@ def _grader_2(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     else:
         score -= 0.10
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_2(ticket: Ticket) -> str:
@@ -701,7 +702,7 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.05 — ticket closed
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "escalated", "all_issues_addressed", "sla_referenced",
             "retention_handled", "priority_set_critical", "empathy_shown",
             "policy_checked", "policy_referenced", "sequencing_correct", "ticket_closed",
@@ -771,7 +772,7 @@ def _grader_3(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["ticket_closed"]:
         score += 0.05
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_3(ticket: Ticket) -> str:
@@ -927,7 +928,7 @@ def _grader_4(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.05 — ticket closed
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "account_locked", "incident_opened", "mfa_advised",
             "compliance_addressed", "forensic_protocol", "legal_mentioned",
             "no_premature_confirmation", "sequencing_correct", "ticket_closed",
@@ -997,7 +998,7 @@ def _grader_4(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["ticket_closed"]:
         score += 0.05
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 TASK_4 = {
@@ -1185,7 +1186,7 @@ def _grader_5(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.05 — efficiency bonus
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "loyalty_acknowledged", "fraud_respected", "specifics_referenced",
             "refund_triggered", "confirmation_referenced", "trace_or_lookup_used",
             "goodwill_offered", "sequencing_correct", "ticket_closed", "priority_set",
@@ -1254,7 +1255,7 @@ def _grader_5(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["priority_set"]:
         score += 0.07
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_5(ticket: Ticket) -> str:
@@ -1417,7 +1418,7 @@ def _grader_6(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.10 — sequencing correct
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "root_cause_identified", "v2_migration_offered", "incident_referenced",
             "endpoint_diagnosed", "workaround_provided", "developer_empathy",
             "escalation_offered", "ticket_closed", "sequencing_correct",
@@ -1468,7 +1469,7 @@ def _grader_6(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["ticket_closed"]:
         score += 0.08
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_6(ticket: Ticket) -> str:
@@ -1609,7 +1610,7 @@ def _grader_7(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.08 — priority/category set
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "exit_reason_explored", "value_recap_provided", "alternative_offered",
             "winback_offered", "competitor_addressed", "empathetic_tone",
             "resolution_found", "sequencing_correct", "metadata_set",
@@ -1670,7 +1671,7 @@ def _grader_7(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     if hints["callback_scheduled"]:
         score += 0.10
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_7(ticket: Ticket) -> str:
@@ -1877,7 +1878,7 @@ def _grader_8(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
       0.10 — sequencing correct
     """
     if not history:
-        return 0.0, {k: False for k in [
+        return 0.001, {k: False for k in [
             "verification_requested", "exemptions_checked", "regulation_referenced",
             "thirdparty_notified", "audit_trail_provided", "retention_explained",
             "escalated_if_needed", "professional_tone", "sequencing_correct",
@@ -1949,7 +1950,7 @@ def _grader_8(history: List[Dict], ticket: Ticket) -> Tuple[float, Dict[str, boo
     else:
         score -= 0.10
 
-    return round(min(max(score, 0.0), 1.0), 4), hints
+    return round(min(max(score, 0.001), 0.999), 4), hints
 
 
 def _build_instructions_8(ticket: Ticket) -> str:
