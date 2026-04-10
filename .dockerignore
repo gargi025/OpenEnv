@@ -5,3 +5,5 @@ README.md
 *.pyc
 __pycache__
 .git
+venv/
+.venv/

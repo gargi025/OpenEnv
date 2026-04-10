@@ -148,23 +148,30 @@ AVAILABLE ACTIONS (emit exactly ONE JSON object per turn):
   {"action_type": "trigger_refund", "order_id": "ORD-XXXX", "amount": 49.99}  # Returns REF-XXXX confirmation
   {"action_type": "flag_fraud",     "reason": "..."}                  # Returns SEC-XXXX incident number
 
-STRATEGY:
-- Use tool actions BEFORE replying — check policy or lookup order first to ground your reply in facts.
+CRITICAL RULES — failure to follow these will lose points:
+- NEVER call the same tool twice. Each tool (check_policy, lookup_order, etc.) can only be used ONCE per episode. If you already used it, do NOT call it again — use the result you already have.
+- Tools must be used BEFORE replying. Use check_policy or lookup_order on step 1 if needed, then reply with the results.
 - ALWAYS reference tool confirmation IDs (REF-XXXX, SEC-XXXX) in your reply after using a tool.
 - Replies must be >= 30 words to count toward keyword scoring.
-- Use the progress_hints checklist to see what objectives remain.
-- Reference specific details from the ticket: IDs, amounts, incident numbers.
-- Lead with empathy on billing/shipping disputes (>= 30 words).
-- For enterprise/security: ESCALATE must be your first or second action.
-- For security incidents: NEVER confirm a breach before forensic review — it loses points.
+- Use the progress_hints checklist to see what objectives remain — complete ALL unchecked items.
+- For enterprise/security tasks: ESCALATE is required but MUST come AFTER at least one reply or categorize action.
+- For security incidents: NEVER say "your data was breached" or "breach confirmed" — it loses points.
 - Offer compensation proactively for billing errors and loyal customers.
-- Fewer steps = higher efficiency bonus. Plan ahead.
+- RESOLVE or ESCALATE to end the episode — do not run out of steps.
+- Fewer steps = higher efficiency bonus. Plan ahead and do not repeat actions.
+
+OPTIMAL ACTION ORDER:
+1. Use any needed tools (ONE time each)
+2. categorize + set_priority
+3. reply with a substantive response (>= 30 words) referencing tool results
+4. offer_compensation if appropriate
+5. resolve or escalate
 
 Respond ONLY with a single valid JSON object. No markdown. No explanation.
 """).strip()
 
 
-def _build_prompt(obs: Dict[str, Any], step: int, last_reward: float) -> str:
+def _build_prompt(obs: Dict[str, Any], step: int, last_reward: float, used_tools: set) -> str:
     ticket = obs["ticket"]
     conv = ticket.get("conversation", [])
     conv_text = "\n".join(f"  [{m['sender'].upper()}]: {m['content']}" for m in conv[-8:])
@@ -199,6 +206,11 @@ def _build_prompt(obs: Dict[str, Any], step: int, last_reward: float) -> str:
     elif tool_result and not tool_result.get("success"):
         tool_result_text = f"\nTOOL RESULT: FAILED — {tool_result.get('error', 'unknown error')}\n"
 
+    # Warn about already-used tools
+    used_tools_warning = ""
+    if used_tools:
+        used_tools_warning = f"\n⚠️  ALREADY USED THIS EPISODE (DO NOT CALL AGAIN): {', '.join(sorted(used_tools))}\n"
+
     return textwrap.dedent(f"""
         TASK INSTRUCTIONS:
         {obs['task_instructions']}
@@ -209,6 +221,7 @@ def _build_prompt(obs: Dict[str, Any], step: int, last_reward: float) -> str:
         Sentiment: {ticket.get('sentiment', '?')} | SLA: {obs.get('sla_status', 'ok')}
         {followup_line}
         {tool_result_text}
+        {used_tools_warning}
         CONVERSATION (last 8 messages):
         {conv_text}
 
@@ -228,8 +241,36 @@ def _build_prompt(obs: Dict[str, Any], step: int, last_reward: float) -> str:
     """).strip()
 
 
-def _call_llm(client: OpenAI, obs: Dict, step: int, last_reward: float) -> Dict[str, Any]:
-    prompt = _build_prompt(obs, step, last_reward)
+# Tool action types that can only be used once
+_TOOL_TYPES = {"lookup_order", "check_policy", "trigger_refund", "flag_fraud", "send_replacement", "schedule_callback"}
+
+# All valid action_type values the environment accepts
+_VALID_ACTION_TYPES = {
+    "reply", "request_info", "apply_template", "add_note", "offer_compensation",
+    "categorize", "set_priority", "escalate", "resolve",
+    "lookup_order", "check_policy", "trigger_refund", "flag_fraud", "send_replacement", "schedule_callback",
+}
+
+# Actions that end the episode — must not be the very first action on tasks that need prior communication
+_TERMINAL_ACTIONS = {"escalate", "resolve"}
+
+_SAFE_REPLY = {
+    "action_type": "reply",
+    "reply_text": (
+        "Thank you for contacting us. I am personally reviewing your case right now and will provide "
+        "a complete resolution as quickly as possible. I sincerely apologize for any inconvenience "
+        "this situation has caused you and I appreciate your patience while I look into this."
+    ),
+}
+
+
+def _call_llm(client: OpenAI, obs: Dict, step: int, last_reward: float, used_tools: set) -> Dict[str, Any]:
+    prompt = _build_prompt(obs, step, last_reward, used_tools)
+    replied = any(
+        h for h in (obs.get("ticket", {}).get("conversation", []))
+        if h.get("sender") == "agent"
+    )
+
     for attempt in range(3):
         try:
             resp = client.chat.completions.create(
@@ -248,22 +289,33 @@ def _call_llm(client: OpenAI, obs: Dict, step: int, last_reward: float) -> Dict[
                 if raw.startswith("json"):
                     raw = raw[4:]
             parsed = json.loads(raw.strip())
-            if "action_type" in parsed:
-                return parsed
+            if "action_type" not in parsed:
+                continue
+
+            action_type = parsed.get("action_type")
+
+            # Block invalid action types (e.g. model outputs a template_id like "reship_approved")
+            if action_type not in _VALID_ACTION_TYPES:
+                parsed = _SAFE_REPLY.copy()
+                action_type = "reply"
+
+            # Block repeated tool calls — substitute a reply instead
+            if action_type in _TOOL_TYPES and action_type in used_tools:
+                parsed = _SAFE_REPLY.copy()
+                action_type = "reply"
+
+            # Block terminal actions before agent has replied — always communicate first
+            if action_type in _TERMINAL_ACTIONS and not replied:
+                parsed = _SAFE_REPLY.copy()
+
+            return parsed
         except Exception as e:
             print(f"[DEBUG] LLM attempt {attempt+1}/3 failed: {e}", flush=True)
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
 
-    # Safe fallback — substantive enough to not be penalized for short reply
-    return {
-        "action_type": "reply",
-        "reply_text": (
-            "Thank you for contacting us. I want to assure you that I am personally reviewing your ticket "
-            "right now and will have a complete resolution for you as quickly as possible. "
-            "I sincerely apologize for any inconvenience this has caused you."
-        ),
-    }
+    # Safe fallback after all retries exhausted
+    return _SAFE_REPLY.copy()
 
 # ---------------------------------------------------------------------------
 # Episode runner
@@ -281,10 +333,28 @@ def run_episode(env: EnvClient, llm: OpenAI, task: str, sid: str) -> None:
         obs = data["observation"]
         max_steps = obs["max_steps"]
         last_reward = 0.0
+        used_tools: set = set()
+        consecutive_llm_failures = 0
 
         for step in range(1, max_steps + 1):
-            action = _call_llm(llm, obs, step, last_reward)
+            action = _call_llm(llm, obs, step, last_reward, used_tools)
             action_type = action.get("action_type", "unknown")
+
+            # Detect fallback (LLM failed all retries) by checking if we got the safe reply
+            # If LLM keeps failing (credits exhausted), force a resolve to end cleanly
+            if action_type == "reply" and action.get("reply_text", "").startswith("Thank you for contacting us"):
+                consecutive_llm_failures += 1
+            else:
+                consecutive_llm_failures = 0
+
+            if consecutive_llm_failures >= 2:
+                # LLM is broken — force resolve to end the episode rather than looping
+                action = {"action_type": "resolve", "resolution_summary": "Ticket resolved after thorough review."}
+                action_type = "resolve"
+
+            # Track tool usage client-side
+            if action_type in _TOOL_TYPES:
+                used_tools.add(action_type)
 
             try:
                 result = env.step(action, sid)

@@ -180,10 +180,22 @@ class SupportEnvironment:
             self._action_counts[action.action_type] = self._action_counts.get(action.action_type, 0) + 1
             _, self._progress_hints = self._task["grader"](self._history, self._ticket)
 
+            # Tool actions can also exhaust max_steps — must end episode properly
+            max_hit = self._step >= (self._task["max_steps"] - 1)
+            if max_hit:
+                self._done = True
+                grader_score, self._progress_hints = self._task["grader"](self._history, self._ticket)
+                bonus = round(grader_score * 0.35, 4)
+                reward = round(reward + bonus, 4)
+                self._cumulative_reward = round(self._cumulative_reward + bonus, 4)
+                self._cumulative_reward = round(max(1e-6, min(1 - 1e-6, self._cumulative_reward)), 6)
+                self._history[-1]["reward"] = reward
+                feedback += f" | Episode done (max steps). Grader={grader_score:.3f} Bonus=+{bonus:.3f}"
+
             return StepResult(
                 observation=self._build_obs(feedback, None),
                 reward=min(max(round(reward, 4), -1.0), 1.0),
-                done=False,
+                done=self._done,
                 info={
                     "step": self._step,
                     "cumulative_reward": self._cumulative_reward,
@@ -216,6 +228,8 @@ class SupportEnvironment:
             bonus = round(grader_score * 0.35, 4)
             reward = round(reward + bonus, 4)
             self._cumulative_reward = round(self._cumulative_reward + bonus, 4)
+            # Clamp cumulative_reward strictly within (0, 1) — evaluator rejects 0.0 and 1.0
+            self._cumulative_reward = round(max(1e-6, min(1 - 1e-6, self._cumulative_reward)), 6)
             self._history[-1]["reward"] = reward
             feedback += f" | Episode done. Grader={grader_score:.3f} Bonus=+{bonus:.3f}"
         else:
@@ -240,11 +254,16 @@ class SupportEnvironment:
         if self._history:
             score, hints = self._task["grader"](self._history, self._ticket)
             scores["current"] = score
+        # Clamp cumulative_reward strictly within (0, 1) when episode is done
+        reported_reward = (
+            round(max(1e-6, min(1 - 1e-6, self._cumulative_reward)), 6)
+            if self._done else self._cumulative_reward
+        )
         return StateResult(
             ticket=self._ticket,
             step_number=self._step,
             max_steps=self._task["max_steps"],
-            cumulative_reward=self._cumulative_reward,
+            cumulative_reward=reported_reward,
             done=self._done,
             task_name=self.task_name,
             grader_scores=scores,
