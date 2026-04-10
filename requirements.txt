@@ -5,4 +5,3 @@ openai==1.58.1
 httpx==0.28.1
 python-multipart==0.0.20
 pytest>=7.0
-openenv-core>=0.2.0
