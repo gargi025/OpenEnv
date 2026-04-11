@@ -1,4 +1,3 @@
-
 ---
 title: OpenEnv Customer Support RL
 emoji: 🤖
@@ -7,24 +6,160 @@ colorTo: green
 sdk: docker
 pinned: false
 ---
+
 # Customer Support Ticket Resolution
 
-An [OpenEnv] environment simulating real-world customer support ticket resolution. AI agents act as support specialists handling tickets across 8 tasks at 4 difficulty levels, featuring dense rewards, SLA pressure, dynamic customer sentiment, simulated multi-turn conversations, and trajectory-aware graders.
+Customer Support Ticket Resolution is an OpenEnv environment for evaluating agents on realistic customer support workflows.  
+The agent acts as a support specialist handling live service tickets across account recovery, billing disputes, subscription retention, enterprise escalations, technical integration failures, security incidents, shipping disputes, and compliance deletion requests.
+
+The environment is designed to test whether an agent can do more than answer one prompt. It must inspect the ticket state, choose structured actions over multiple steps, communicate clearly, apply policy, use tools when needed, and finish the episode with a coherent resolution.
+
+## Motivation
+
+Customer support is a strong real-world benchmark for agent evaluation because it combines:
+- structured workflow execution
+- multi-turn reasoning
+- policy compliance
+- prioritization and escalation
+- user communication quality
+- partial progress and recovery from mistakes
+
+This environment was built to model the kinds of operational tasks humans actually perform in support and operations teams. It is useful for evaluating whether an LLM agent can follow workflow logic, use internal tools, and balance correctness, speed, empathy, and safety.
 
 ---
 
-## Quick Start
+## Environment Overview
 
-### Local Development
+The environment simulates a support queue with:
+- typed ticket state
+- dense trajectory rewards
+- deterministic task graders
+- dynamic customer sentiment
+- SLA warning and breach pressure
+- multi-turn customer followups
+- structured support actions
+- tool-use actions for policy lookup, order lookup, refunds, and fraud/security flagging
+
+---
+
+## Action Space
+
+The action space is structured and typed.
+
+### Communication actions
+- `reply` — Send a reply to the customer. Requires `reply_text`.
+- `request_info` — Ask the customer for more information. Requires `reply_text`.
+- `apply_template` — Use a canned response template. Requires `template_id`.
+- `add_note` — Add an internal note not visible to the customer. Requires `note_text`.
+- `offer_compensation` — Offer proactive compensation or credit. Requires `compensation_amount` and usually `reply_text`.
+
+### Ticket management actions
+- `categorize` — Set the ticket category. Requires `category`.
+- `set_priority` — Set the ticket priority. Requires `priority`.
+- `escalate` — Escalate to a human or specialist flow. Usually includes `escalation_reason`.
+- `resolve` — Mark the ticket as resolved. Usually includes `resolution_summary`.
+
+### Tool-use actions
+- `lookup_order` — Retrieve order status and related metadata.
+- `check_policy` — Retrieve policy or workflow text relevant to the current task.
+- `trigger_refund` — Initiate a refund and receive a confirmation ID.
+- `flag_fraud` — Open a fraud/security incident and receive a case ID.
+
+Tool actions consume a step and return structured output in `observation.tool_result`.
+
+---
+
+## Observation Space
+
+Each step returns a structured observation:
+
+```python
+{
+  "ticket": Ticket,
+  "step_number": int,
+  "max_steps": int,
+  "steps_remaining": int,
+  "available_templates": List[Dict[str, str]],
+  "kb_snippets": List[str],
+  "last_action_feedback": str | None,
+  "task_instructions": str,
+  "sla_status": "ok" | "warning" | "breached",
+  "customer_sentiment": "angry" | "frustrated" | "neutral" | "satisfied" | "delighted",
+  "customer_followup": str | None,
+  "progress_hints": Dict[str, bool],
+  "tool_result": ToolResult | None
+}
+```
+
+### Important observation features
+- `ticket` contains the live ticket state, conversation history, metadata, and SLA information
+- `progress_hints` exposes transparent grader sub-goals
+- `tool_result` enables multi-step reasoning after tool use
+- `sla_status` and `customer_sentiment` add realistic operational pressure
+
+---
+
+## Tasks and Expected Difficulty
+
+The environment includes 8 tasks across easy, medium, hard, and expert difficulty levels.
+
+| Task | Difficulty | Description |
+|---|---|---|
+| `password-reset-easy` | Easy | Resolve a password reset problem by categorizing correctly, setting priority, replying with actionable reset guidance, and closing the ticket. |
+| `billing-dispute-medium` | Medium | Handle a duplicate charge dispute with empathy, order reference, refund handling, and goodwill compensation. |
+| `subscription-retention-medium` | Medium | Reduce churn risk by exploring exit reasons, recapping value, and offering alternatives such as downgrade or pause. |
+| `enterprise-escalation-hard` | Hard | Triage a high-stakes enterprise case involving outage, data loss, billing overage, and churn risk. |
+| `technical-integration-hard` | Hard | Diagnose an API/webhook integration issue and provide root cause, workaround, and migration guidance. |
+| `security-incident-expert` | Expert | Respond to a potential security incident while following protocol and avoiding premature breach confirmation. |
+| `shipping-dispute-expert` | Expert | Resolve a missing-package dispute for a loyal customer while applying policy correctly and avoiding unnecessary friction. |
+| `compliance-deletion-expert` | Expert | Process a GDPR/CCPA-style deletion request while checking exemptions and compliance constraints. |
+
+### Difficulty progression
+- **Easy**: clear workflow, low ambiguity
+- **Medium**: requires policy use and better communication quality
+- **Hard**: requires prioritization, escalation judgment, and multi-issue reasoning
+- **Expert**: requires safety, compliance, or protocol-sensitive behavior under ambiguity
+
+---
+
+## Reward Design
+
+The reward function is dense and trajectory-aware.
+
+### Positive signals
+- correct categorization
+- setting priority
+- substantive replies
+- correct tool usage
+- policy-following behavior
+- sentiment improvement
+- efficient completion
+- terminal grader bonus
+
+### Negative signals
+- wrong categorization
+- short or low-quality replies
+- redundant actions
+- poor sequencing
+- SLA breaches
+- clearly undesirable support behavior
+
+### Grader design
+Each task includes a deterministic programmatic grader that:
+- scores only agent actions
+- rewards partial completion
+- penalizes undesirable patterns
+- provides boolean progress hints for transparency
+
+---
+
+## Setup
+
+### Local development
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Or install as package
 pip install -e .
-
-# Run the server
 uvicorn app.main:app --host 0.0.0.0 --port 7860 --reload
 ```
 
@@ -35,216 +170,100 @@ docker build -t openenv-customer-support .
 docker run -p 7860:7860 openenv-customer-support
 ```
 
-### Validate Installation
+### Validation
 
 ```bash
-# Check OpenEnv compliance
 openenv validate
-
-# Run tests
 pytest tests/ -v
+./validate-submission.sh https://your-space.hf.space
 ```
 
 ---
 
-## Action Space
+## Usage
 
-### Communication Actions
-- `reply` — Send a response to the customer (requires `reply_text`)
-- `request_info` — Ask customer for more information (requires `reply_text`)
-- `apply_template` — Use a canned response template (requires `template_id`)
-- `add_note` — Add internal note (not sent to customer)
-- `offer_compensation` — Proactively offer credit/refund (requires `compensation_amount` and `reply_text`)
-
-### Ticket Management Actions
-- `categorize` — Set ticket category (requires `category`)
-- `set_priority` — Set ticket priority (requires `priority`)
-- `escalate` — Escalate to human agent (ends episode)
-- `resolve` — Mark ticket resolved (ends episode)
-
-### Tool-Use Actions (Agentic)
-- `lookup_order` — Retrieve order status/metadata (requires `order_id`)
-- `check_policy` — Query knowledge base for policy (requires `policy_topic`)
-- `trigger_refund` — Process refund (requires `order_id`, `amount`)
-- `flag_fraud` — Flag account for review (requires `reason`)
-
-Tool actions cost a step and return structured data in `observation.tool_result`. Agents should use tools before replying and reference confirmation IDs (REF-XXXX, SEC-XXXX) in subsequent replies for bonus rewards.
-
----
-
-## Observation Space
-
-```python
-{
-  "ticket": Ticket,                    # Full ticket with conversation history
-  "step_number": int,
-  "max_steps": int,
-  "steps_remaining": int,
-  "available_templates": List[Dict],   # Canned response options
-  "kb_snippets": List[str],            # Relevant knowledge base entries
-  "last_action_feedback": str,         # Human-readable feedback
-  "task_instructions": str,            # Natural language objectives
-  "sla_status": "ok" | "warning" | "breached",
-  "customer_sentiment": "angry" | "frustrated" | "neutral" | "satisfied" | "delighted",
-  "customer_followup": str | None,     # Simulated customer reply
-  "progress_hints": Dict[str, bool],   # Live grader checklist
-  "tool_result": ToolResult | None     # Result from previous tool call
-}
-```
-
----
-
-## Tasks
-
-| Task | Difficulty | Max Steps | Description |
-|------|------------|-----------|-------------|
-| `password-reset-easy` | Easy | 6 | Help customer with password reset. Must categorize as account, set priority, send actionable reply. |
-| `billing-dispute-medium` | Medium | 8 | Handle duplicate charge dispute. Requires empathy, correct categorization, referencing order IDs, refund initiation. |
-| `subscription-retention-medium` | Medium | 10 | Prevent customer churn. Explore exit reasons, provide value recap, offer alternatives (pause/downgrade). |
-| `enterprise-escalation-hard` | Hard | 10 | Triage critical enterprise customer with API outage, billing overage, data loss. Requires multi-issue triage and SLA-aware escalation. |
-| `technical-integration-hard` | Hard | 10 | Debug webhook/API failure (HTTP 410). Diagnose v1 deprecation, offer v2 migration path. |
-| `security-incident-expert` | Expert | 10 | Handle potential security breach. Lock account, alert security, advise MFA. **Critical**: Must NOT prematurely confirm breach before forensic review. |
-| `shipping-dispute-expert` | Expert | 8 | Resolve missing package for loyal customer. Apply loyalty policy (immediate reship/refund), avoid excessive verification. |
-| `compliance-deletion-expert` | Expert | 12 | Process GDPR/CCPA deletion request. Verify identity, check exemptions, reference regulations, provide audit trail. |
-
----
-
-## Reward System
-
-Dense per-step rewards with terminal grader bonus:
-
-| Action | Reward |
-|--------|--------|
-| Reply (base) | +0.08 (× sentiment multiplier) |
-| Long reply (≥100 chars) | +0.04 |
-| Correct categorize | +0.10 |
-| Set priority | +0.07 |
-| Tool use | +0.04 (+ contextual bonuses) |
-| Compensation offer | +0.07 |
-| Template applied | +0.05 |
-| Sentiment improvement | +0.04 per level |
-| SLA urgency bonus | +0.05 (resolve before warning) |
-| Policy adherence | +0.04 |
-| Terminal grader bonus | Up to +0.35 |
-| Wrong category | -0.08 |
-| Redundant actions | -0.04 |
-| Short reply (<20 chars) | -0.02 |
-| SLA breach | -0.10 to -0.20 |
-| Anti-patterns | -0.06 |
-
-**Key**: Graders score only AGENT ACTIONS, never initial ticket state. Empty history always scores 0.0.
-
----
-
-## Running Baseline Inference
+### Start the server locally
 
 ```bash
-# Set environment variables
-export SUPPORT_ENV_URL=http://localhost:7860  # Or your HF Space URL
-export HF_TOKEN=your_huggingface_token
-export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+uvicorn app.main:app --host 0.0.0.0 --port 7860
+```
 
-# Run all tasks
+### Example API flow
+
+```bash
+curl -X POST http://localhost:7860/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_name":"password-reset-easy","session_id":"demo"}'
+
+curl -X POST http://localhost:7860/step \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","action":{"action_type":"categorize","category":"account"}}'
+
+curl http://localhost:7860/state
+```
+
+### Run the baseline agent
+
+```bash
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+export HF_TOKEN="your_token_here"
+export SUPPORT_ENV_URL="http://localhost:7860"
+
 python inference.py
+```
 
-# Run single task
+To run one task only:
+
+```bash
 export TASK_NAME=password-reset-easy
 python inference.py
 ```
 
-Expected output format:
-```
-[START] task=password-reset-easy env=customer-support model=Qwen/Qwen2.5-72B-Instruct
-[STEP] step=1 action=categorize reward=0.10 done=false error=null
-[STEP] step=2 action=set_priority reward=0.07 done=false error=null
-...
-[END] success=true steps=4 score=0.850 rewards=0.10,0.07,0.12,0.35
-```
-
 ---
 
-## Environment Design Principles
+## Baseline Scores
 
-1. **Graders score actions only** — Initial ticket category/priority are set by system; agents must explicitly categorize/set priority to earn points.
-2. **Empty history = 0.0** — Prevents trivial high scores.
-3. **Tool-use first** — Agents should use tools (lookup_order, check_policy) before replying, then reference confirmation IDs.
-4. **Sentiment dynamics** — Customer sentiment shifts based on agent actions. Compensation improves sentiment by 2 levels.
-5. **SLA pressure** — Warning at 65% of breach_step, breach penalty escalates.
-6. **Anti-pattern detection** — Penalizes asking for info already in ticket, resolving without customer communication.
+A baseline inference script is provided in `inference.py` and is reproducible with the required environment variables.
+
+During the final submission window, provider credit exhaustion prevented a clean full rerun across all tasks. Because of that, I am not reporting a refreshed benchmark table here rather than risk publishing misleading values. The included script is the reference baseline implementation for rerunning scores.
 
 ---
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/reset` | Start/restart episode. Optional: `task_name`, `session_id` |
-| POST | `/step` | Execute action. Returns observation, reward, done |
-| GET | `/state` | Inspect current state (no side effects) |
-| GET | `/tasks` | List all tasks with metadata |
-| GET | `/health` | Liveness probe |
-| POST | `/reset_all` | Clear all sessions (for batch eval) |
-
----
-
-## Testing
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_environment.py -v
-
-# Run with coverage
-pytest tests/ --cov=app --cov-report=html
-```
-
----
-
-## Deployment
-
-### Hugging Face Spaces
-
-1. Create new Space with Docker SDK
-2. Push code to Space repository
-3. Space will auto-build and deploy
-4. Access endpoints at `https://{username}-{spacename}.hf.space`
-
-### Validation Script
-
-```bash
-./validate-submission.sh https://your-space.hf.space
-```
-
-Validates:
-1. HF Space responds to /reset
-2. Docker build succeeds
-3. `openenv validate` passes
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/reset` | Start or restart an episode |
+| POST | `/step` | Apply one action |
+| GET | `/state` | Inspect current episode state |
+| GET | `/tasks` | List task metadata |
+| GET | `/health` | Liveness and environment status |
+| POST | `/reset_all` | Clear active sessions |
 
 ---
 
 ## Project Structure
 
-```
+```text
 .
 ├── app/
-│   ├── __init__.py
-│   ├── main.py           # FastAPI server
-│   ├── environment.py    # SupportEnvironment (episode engine)
-│   ├── models.py         # Pydantic models
-│   └── tasks.py          # Task definitions + graders
+│   ├── main.py
+│   ├── environment.py
+│   ├── models.py
+│   └── tasks.py
+├── server/
+│   └── app.py
 ├── tests/
 │   └── test_environment.py
-├── server/
-│   └── app.py            # Entry point wrapper
-├── inference.py          # Baseline agent script
-├── openenv.yaml          # OpenEnv spec
-├── pyproject.toml        # Package config
-├── requirements.txt
+├── inference.py
+├── openenv.yaml
+├── pyproject.toml
 ├── Dockerfile
+├── requirements.txt
 ├── validate-submission.sh
-└── README.md
+├── README.md
+└── GRADERS.md
 ```
 
 ---
