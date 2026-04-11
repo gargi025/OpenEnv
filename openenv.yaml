@@ -2,7 +2,7 @@ name: customer-support-ticket-resolution
 version: "2.0.0"
 description: >
   An OpenEnv environment simulating real-world customer support ticket resolution.
-  An AI agent acts as a support specialist handling tickets across five tasks at
+  An AI agent acts as a support specialist handling tickets across eight tasks at
   four difficulty levels: easy, medium, hard, and expert. Features include dense
   per-step rewards, SLA pressure with breach penalties, dynamic customer sentiment
   simulation, simulated multi-turn customer conversations, trajectory-aware graders

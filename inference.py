@@ -264,7 +264,15 @@ _SAFE_REPLY = {
 }
 
 
-def _call_llm(client: OpenAI, obs: Dict, step: int, last_reward: float, used_tools: set) -> Dict[str, Any]:
+def _call_llm(
+    client: OpenAI,
+    task: str,
+    obs: Dict[str, Any],
+    step: int,
+    last_reward: float,
+    used_tools: Set[str],
+    action_counts: Dict[str, int],
+) -> Dict[str, Any]:
     prompt = _build_prompt(obs, step, last_reward, used_tools)
     replied = any(
         h for h in (obs.get("ticket", {}).get("conversation", []))
@@ -334,27 +342,49 @@ def run_episode(env: EnvClient, llm: OpenAI, task: str, sid: str) -> None:
         max_steps = obs["max_steps"]
         last_reward = 0.0
         used_tools: set = set()
-        consecutive_llm_failures = 0
+        action_counts: Dict[str, int] = {}
 
         for step in range(1, max_steps + 1):
-            action = _call_llm(llm, obs, step, last_reward, used_tools)
+            action = _call_llm(llm, task, obs, step, last_reward, used_tools, action_counts)
             action_type = action.get("action_type", "unknown")
 
-            # Detect fallback (LLM failed all retries) by checking if we got the safe reply
-            # If LLM keeps failing (credits exhausted), force a resolve to end cleanly
-            if action_type == "reply" and action.get("reply_text", "").startswith("Thank you for contacting us"):
-                consecutive_llm_failures += 1
-            else:
-                consecutive_llm_failures = 0
+            hints = obs.get("progress_hints", {}) or {}
 
-            if consecutive_llm_failures >= 2:
-                # LLM is broken — force resolve to end the episode rather than looping
-                action = {"action_type": "resolve", "resolution_summary": "Ticket resolved after thorough review."}
-                action_type = "resolve"
+            # Prevent repeated categorize loops
+            if action_type == "categorize":
+                if (
+                    action_counts.get("categorize", 0) >= 1
+                    or hints.get("categorized_as_account", False)
+                    or hints.get("categorized_correctly", False)
+                ):
+                    action = _fallback_action(task, obs, used_tools)
+                    action_type = action.get("action_type", "unknown")
+
+            # Prevent repeated priority loops
+            if action_type == "set_priority":
+                if (
+                    action_counts.get("set_priority", 0) >= 1
+                    or hints.get("priority_set", False)
+                    or hints.get("priority_set_critical", False)
+                ):
+                    action = _fallback_action(task, obs, used_tools)
+                    action_type = action.get("action_type", "unknown")
+
+            # Prevent repeated terminal actions before meaningful progress
+            if action_type in {"resolve", "escalate"}:
+                if not any(
+                    k for k, v in hints.items()
+                    if v and k not in {"sequencing_correct", "ticket_closed", "efficient_resolution"}
+                ):
+                    action = _fallback_action(task, obs, used_tools)
+                    action_type = action.get("action_type", "unknown")
 
             # Track tool usage client-side
             if action_type in _TOOL_TYPES:
                 used_tools.add(action_type)
+
+            # Track action counts
+            action_counts[action_type] = action_counts.get(action_type, 0) + 1
 
             try:
                 result = env.step(action, sid)
@@ -378,12 +408,22 @@ def run_episode(env: EnvClient, llm: OpenAI, task: str, sid: str) -> None:
             if done:
                 break
 
-        max_possible = max_steps * 0.45
-        score = min(max(sum(rewards) / max_possible, 0.0), 1.0) if max_possible > 0 else 0.0
+        try:
+            state = env.state()
+            grader_scores = state.get("grader_scores", {}) or {}
+            if "current" in grader_scores:
+                score = float(grader_scores["current"])
+            else:
+                max_possible = max_steps * 0.45
+                score = min(max(sum(rewards) / max_possible, 0.0), 1.0) if max_possible > 0 else 0.0
+        except Exception:
+            max_possible = max_steps * 0.45
+            score = min(max(sum(rewards) / max_possible, 0.0), 1.0) if max_possible > 0 else 0.0
+
         success = score >= SUCCESS_THRESHOLD
 
     except Exception as e:
-        print(f"[DEBUG] Episode error: {e}", flush=True)
+        print(f"[DEBUG] Episode error: {e}", file=sys.stderr, flush=True)
     finally:
         log_end(success, steps, score, rewards)
 
