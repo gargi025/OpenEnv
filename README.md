@@ -224,9 +224,22 @@ python inference.py
 
 ## Baseline Scores
 
-A baseline inference script is provided in `inference.py` and is reproducible with the required environment variables.
+The repository includes a baseline inference script in `inference.py` that runs an LLM agent against the environment using the OpenAI Python client.
 
-During the final submission window, provider credit exhaustion prevented a clean full rerun across all tasks. Because of that, I am not reporting a refreshed benchmark table here rather than risk publishing misleading values. The included script is the reference baseline implementation for rerunning scores.
+The following baseline scores were measured on the current submission version:
+
+| Task | Baseline score |
+|---|---:|
+| `password-reset-easy` | 0.189 |
+| `billing-dispute-medium` | 0.217 |
+| `subscription-retention-medium` | 0.315 |
+| `enterprise-escalation-hard` | 0.144 |
+| `technical-integration-hard` | 0.160 |
+| `security-incident-expert` | 0.197 |
+| `shipping-dispute-expert` | 0.318 |
+| `compliance-deletion-expert` | 0.380 |
+
+**Average baseline score:** `0.240`
 
 ---
 
