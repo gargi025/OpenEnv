@@ -206,7 +206,7 @@ curl http://localhost:7860/state
 
 ```bash
 export API_BASE_URL="https://router.huggingface.co/v1"
-export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
 export HF_TOKEN="your_token_here"
 export SUPPORT_ENV_URL="http://localhost:7860"
 
